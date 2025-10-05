@@ -1112,4 +1112,9 @@ void loop()
 {
   artnet.read();
   g_server.handleClient();
+  // El lazo principal puede quedarse sin pausas cuando no hay tráfico de red
+  // que atender.  En algunos módulos ESP32 esto termina activando el watchdog
+  // de la tarea principal y provoca reinicios continuos.  Un pequeño retraso
+  // cede tiempo a las demás tareas del RTOS y mantiene alimentado el WDT.
+  delay(1);
 }
