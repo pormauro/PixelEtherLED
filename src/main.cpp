@@ -70,6 +70,7 @@ void restoreFactoryDefaults();
 bool checkFactoryResetOnBoot();
 void bringUpEthernet(const AppConfig& config);
 void bringUpWiFi(const AppConfig& config);
+bool ensureWifiDriverInitialised();
 void handleWifiScan();
 String jsonEscape(const String& text);
 String wifiAuthModeToText(wifi_auth_mode_t mode);
@@ -208,6 +209,28 @@ String wifiAuthModeToText(wifi_auth_mode_t mode)
 
 Preferences g_prefs;
 WebServer g_server(80);
+
+bool ensureWifiDriverInitialised()
+{
+  static bool wifiDriverInitialised = false;
+
+  if (wifiDriverInitialised) {
+    return true;
+  }
+
+  // Fuerza al driver de Wi-Fi a inicializarse al menos una vez para que las
+  // llamadas de limpieza (scanDelete/softAPdisconnect/etc.) no disparen
+  // asserts dentro de la pila TCP/IP cuando nunca se había arrancado.
+  if (!WiFi.mode(WIFI_STA)) {
+    Serial.println("[WIFI] No se pudo inicializar el driver Wi-Fi.");
+    return false;
+  }
+
+  delay(10);
+  WiFi.mode(WIFI_OFF);
+  wifiDriverInitialised = true;
+  return true;
+}
 
 // ===================== ART-NET =====================
 ArtNetNode artnet;
@@ -859,8 +882,12 @@ void bringUpWiFi(const AppConfig& config)
   // invoking any Wi-Fi API.  Calling functions such as scanDelete() or
   // softAPdisconnect() while the driver is still stopped can trigger an
   // assertion inside LwIP ("Invalid mbox").
-  WiFi.mode(WIFI_OFF);
+  if (!ensureWifiDriverInitialised()) {
+    Serial.println("[WIFI] Se omitió la reconfiguración por fallo del driver.");
+    return;
+  }
 
+  WiFi.mode(WIFI_OFF);
   WiFi.scanDelete();
   WiFi.softAPdisconnect(true);
   WiFi.disconnect(true, true);
@@ -1004,6 +1031,11 @@ void bringUpEthernet(const AppConfig& config)
 
 void handleWifiScan()
 {
+  if (!ensureWifiDriverInitialised()) {
+    g_server.send(500, "application/json", F("{\"error\":\"wifi_driver_failed\"}"));
+    return;
+  }
+
   int16_t n = WiFi.scanNetworks(/*async=*/false, /*show_hidden=*/true);
   if (n < 0) {
     g_server.send(500, "application/json", F("{\"error\":\"scan_failed\"}"));
