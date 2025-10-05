@@ -204,6 +204,18 @@ String wifiAuthModeToText(wifi_auth_mode_t mode)
 Preferences g_prefs;
 WebServer g_server(80);
 
+// ===================== ART-NET =====================
+ArtNetNode artnet;
+std::vector<uint8_t> g_universeReceived;
+uint16_t g_universeCount = 0;
+
+// ===================== DEBUG DMX =====================
+//#define DMX_DEBUG                      1
+#define DMX_DEBUG_LED_INDEX            0     // LED que mostramos por serie
+#define DMX_DEBUG_CHANNELS_TO_PRINT    12    // Primeros N canales del paquete
+#define DMX_DEBUG_MIN_INTERVAL_MS      200   // Evitar spam serie
+uint32_t g_dmxFrames = 0;
+
 namespace {
 
 constexpr const char* PREF_NAMESPACE = "pixelcfg";
@@ -495,18 +507,6 @@ void restoreFactoryDefaults()
   }
   g_config = makeDefaultConfig();
 }
-
-// ===================== ART-NET =====================
-ArtNetNode artnet;
-std::vector<uint8_t> g_universeReceived;
-uint16_t g_universeCount = 0;
-
-// ===================== DEBUG DMX =====================
-//#define DMX_DEBUG                      1
-#define DMX_DEBUG_LED_INDEX            0     // LED que mostramos por serie
-#define DMX_DEBUG_CHANNELS_TO_PRINT    12    // Primeros N canales del paquete
-#define DMX_DEBUG_MIN_INTERVAL_MS      200   // Evitar spam serie
-uint32_t g_dmxFrames = 0;
 
 // ===================== ETHERNET (WT32-ETH01 / LAN8720) =====================
 #define ETH_PHY_ADDR   1
