@@ -26,11 +26,11 @@ static const IPAddress STATIC_DNS2 (8, 8, 8, 8);
 
 constexpr bool     DEFAULT_USE_DHCP          = true;
 constexpr bool     DEFAULT_FALLBACK_TO_STATIC = true;
-constexpr uint32_t DEFAULT_STATIC_IP         = static_cast<uint32_t>(STATIC_IP);
-constexpr uint32_t DEFAULT_STATIC_GW         = static_cast<uint32_t>(STATIC_GW);
-constexpr uint32_t DEFAULT_STATIC_MASK       = static_cast<uint32_t>(STATIC_MASK);
-constexpr uint32_t DEFAULT_STATIC_DNS1       = static_cast<uint32_t>(STATIC_DNS1);
-constexpr uint32_t DEFAULT_STATIC_DNS2       = static_cast<uint32_t>(STATIC_DNS2);
+const uint32_t DEFAULT_STATIC_IP         = static_cast<uint32_t>(STATIC_IP);
+const uint32_t DEFAULT_STATIC_GW         = static_cast<uint32_t>(STATIC_GW);
+const uint32_t DEFAULT_STATIC_MASK       = static_cast<uint32_t>(STATIC_MASK);
+const uint32_t DEFAULT_STATIC_DNS1       = static_cast<uint32_t>(STATIC_DNS1);
+const uint32_t DEFAULT_STATIC_DNS2       = static_cast<uint32_t>(STATIC_DNS2);
 
 // ===================== LEDS =====================
 constexpr uint8_t LED_DATA_PIN        = 2;
