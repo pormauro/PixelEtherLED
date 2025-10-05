@@ -16,7 +16,7 @@ static const IPAddress STATIC_DNS2 (8, 8, 8, 8);
 #define DATA_PIN      2
 #define NUM_LEDS      60
 #define LED_TYPE      WS2811
-#define COLOR_ORDER   GRB
+#define COLOR_ORDER   BRG
 CRGB leds[NUM_LEDS];
 
 // ===================== ART-NET =====================
@@ -29,7 +29,7 @@ Artnet artnet;
 bool universeReceived[16] = {0}; // Aumentá si usás >16 universos
 
 // ===================== DEBUG DMX =====================
-#define DMX_DEBUG                      1
+//#define DMX_DEBUG                      1
 #define DMX_DEBUG_LED_INDEX            0     // LED que mostramos por serie
 #define DMX_DEBUG_CHANNELS_TO_PRINT    12    // Primeros N canales del paquete
 #define DMX_DEBUG_MIN_INTERVAL_MS      200   // Evitar spam serie
@@ -141,7 +141,7 @@ void onDmxFrame(uint16_t universe, uint16_t length, uint8_t sequence,
   }
 }
 
-void bringUpEthernetWithDhcpFallback(unsigned long dhcpTimeoutMs = 12000)
+void bringUpEthernetWithDhcpFallback(unsigned long dhcpTimeoutMs = 3000)
 {
   pinMode(ETH_POWER_PIN, OUTPUT);
   digitalWrite(ETH_POWER_PIN, HIGH);
