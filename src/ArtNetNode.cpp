@@ -255,7 +255,7 @@ void ArtNetNode::read()
     return;
   }
 
-  IPAddress packetLocal = m_udp.localIP();
+  IPAddress packetLocal = m_localIp;
   bool dropPacket = false;
 
   if (packetLocal != IPAddress((uint32_t)0)) {
