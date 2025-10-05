@@ -102,15 +102,77 @@ void ArtNetNode::updateNetworkInfo()
   refreshLocalInfo();
 }
 
+void ArtNetNode::setInterfacePreference(InterfacePreference preference)
+{
+  m_interfacePreference = preference;
+  refreshLocalInfo();
+}
+
 void ArtNetNode::refreshLocalInfo()
 {
-  IPAddress current = ETH.localIP();
-  if (current == IPAddress((uint32_t)0)) {
-    current = WiFi.localIP();
+  enum class ActiveInterface : uint8_t {
+    None,
+    Ethernet,
+    WiFi,
+  };
+
+  ActiveInterface active = ActiveInterface::None;
+
+  auto pickEthernet = [&]() {
+    IPAddress ip = ETH.localIP();
+    if (ip != IPAddress((uint32_t)0)) {
+      active = ActiveInterface::Ethernet;
+    }
+    return ip;
+  };
+
+  auto pickWifi = [&]() {
+    IPAddress ip = WiFi.localIP();
+    if (ip == IPAddress((uint32_t)0)) {
+      ip = WiFi.softAPIP();
+    }
+    if (ip != IPAddress((uint32_t)0)) {
+      active = ActiveInterface::WiFi;
+    }
+    return ip;
+  };
+
+  IPAddress current((uint32_t)0);
+
+  switch (m_interfacePreference) {
+    case InterfacePreference::WiFi:
+      current = pickWifi();
+      if (current == IPAddress((uint32_t)0)) {
+        current = pickEthernet();
+      }
+      break;
+    case InterfacePreference::Auto:
+      current = pickEthernet();
+      if (current == IPAddress((uint32_t)0)) {
+        current = pickWifi();
+      }
+      break;
+    case InterfacePreference::Ethernet:
+    default:
+      current = pickEthernet();
+      if (current == IPAddress((uint32_t)0)) {
+        current = pickWifi();
+      }
+      break;
   }
+
   m_localIp = current;
 
-  if (esp_read_mac(m_mac.data(), ESP_MAC_ETH) != ESP_OK) {
+  esp_mac_type_t macType = ESP_MAC_ETH;
+  if (active == ActiveInterface::WiFi) {
+    if ((WiFi.getMode() & WIFI_AP) != 0 && WiFi.softAPIP() == current) {
+      macType = ESP_MAC_WIFI_SOFTAP;
+    } else {
+      macType = ESP_MAC_WIFI_STA;
+    }
+  }
+
+  if (esp_read_mac(m_mac.data(), macType) != ESP_OK) {
     std::fill(m_mac.begin(), m_mac.end(), 0);
   }
 }
