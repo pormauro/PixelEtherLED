@@ -1061,9 +1061,10 @@ void setup()
   Serial.begin(115200);
   delay(200);
 
-  if (checkFactoryResetOnBoot()) {
-    restoreFactoryDefaults();
-  }
+  // Temporarily disable factory reset on boot until feature is re-enabled.
+  // if (checkFactoryResetOnBoot()) {
+  //   restoreFactoryDefaults();
+  // }
 
   loadConfig();
 
