@@ -26,6 +26,13 @@ static const IPAddress STATIC_DNS2 (8, 8, 8, 8);
 
 constexpr bool     DEFAULT_USE_DHCP          = true;
 constexpr bool     DEFAULT_FALLBACK_TO_STATIC = true;
+constexpr bool     DEFAULT_WIFI_ENABLED       = false;
+constexpr bool     DEFAULT_WIFI_AP_MODE       = true;
+const char* const  DEFAULT_WIFI_STA_SSID      = "";
+const char* const  DEFAULT_WIFI_STA_PASSWORD  = "";
+const char* const  DEFAULT_WIFI_AP_SSID       = "PixelEtherLED";
+const char* const  DEFAULT_WIFI_AP_PASSWORD   = "";
+constexpr const char* DEVICE_HOSTNAME         = "esp32-artnet";
 const uint32_t DEFAULT_STATIC_IP         = static_cast<uint32_t>(STATIC_IP);
 const uint32_t DEFAULT_STATIC_GW         = static_cast<uint32_t>(STATIC_GW);
 const uint32_t DEFAULT_STATIC_MASK       = static_cast<uint32_t>(STATIC_MASK);
@@ -93,6 +100,12 @@ struct AppConfig {
   uint32_t staticSubnet;
   uint32_t staticDns1;
   uint32_t staticDns2;
+  bool     wifiEnabled;
+  bool     wifiApMode;
+  String   wifiStaSsid;
+  String   wifiStaPassword;
+  String   wifiApSsid;
+  String   wifiApPassword;
 };
 
 AppConfig makeDefaultConfig();
@@ -100,6 +113,12 @@ String ipToString(uint32_t ipValue);
 uint32_t parseIp(const String& text, uint32_t fallback);
 void restoreFactoryDefaults();
 bool checkFactoryResetOnBoot();
+void bringUpEthernet(const AppConfig& config);
+void bringUpWiFi(const AppConfig& config);
+void handleWifiScan();
+String htmlEscape(const String& text);
+String jsonEscape(const String& text);
+String wifiAuthModeToText(wifi_auth_mode_t mode);
 
 AppConfig g_config = makeDefaultConfig();
 
@@ -124,6 +143,12 @@ AppConfig makeDefaultConfig()
   cfg.staticSubnet    = DEFAULT_STATIC_MASK;
   cfg.staticDns1      = DEFAULT_STATIC_DNS1;
   cfg.staticDns2      = DEFAULT_STATIC_DNS2;
+  cfg.wifiEnabled     = DEFAULT_WIFI_ENABLED;
+  cfg.wifiApMode      = DEFAULT_WIFI_AP_MODE;
+  cfg.wifiStaSsid     = DEFAULT_WIFI_STA_SSID;
+  cfg.wifiStaPassword = DEFAULT_WIFI_STA_PASSWORD;
+  cfg.wifiApSsid      = DEFAULT_WIFI_AP_SSID;
+  cfg.wifiApPassword  = DEFAULT_WIFI_AP_PASSWORD;
   return cfg;
 }
 
@@ -142,12 +167,80 @@ uint32_t parseIp(const String& text, uint32_t fallback)
   return fallback;
 }
 
+String htmlEscape(const String& text)
+{
+  String out;
+  out.reserve(text.length());
+  for (size_t i = 0; i < text.length(); ++i) {
+    const char c = text[i];
+    switch (c) {
+      case '&': out += F("&amp;"); break;
+      case '<': out += F("&lt;"); break;
+      case '>': out += F("&gt;"); break;
+      case '"': out += F("&quot;"); break;
+      case 39: out += F("&#39;"); break;
+      default: out += c; break;
+    }
+  }
+  return out;
+}
+
+String jsonEscape(const String& text)
+{
+  String out;
+  out.reserve(text.length() + 8);
+  for (size_t i = 0; i < text.length(); ++i) {
+    const char c = text[i];
+    switch (c) {
+      case '\\': out += F("\\\\"); break;
+      case '"': out += F("\\\""); break;
+      case '\n': out += F("\\n"); break;
+      case '\r': break;
+      case '\t': out += F("\\t"); break;
+      default:
+        if (static_cast<uint8_t>(c) < 0x20) {
+          char buf[7];
+          snprintf(buf, sizeof(buf), "\\u%04X", static_cast<uint8_t>(c));
+          out += buf;
+        } else {
+          out += c;
+        }
+        break;
+    }
+  }
+  return out;
+}
+
+String wifiAuthModeToText(wifi_auth_mode_t mode)
+{
+  switch (mode) {
+    case WIFI_AUTH_OPEN: return F("Abierta");
+    case WIFI_AUTH_WEP: return F("WEP");
+    case WIFI_AUTH_WPA_PSK: return F("WPA-PSK");
+    case WIFI_AUTH_WPA2_PSK: return F("WPA2-PSK");
+    case WIFI_AUTH_WPA_WPA2_PSK: return F("WPA/WPA2-PSK");
+    case WIFI_AUTH_WPA2_ENTERPRISE: return F("WPA2-Enterprise");
+    case WIFI_AUTH_WPA3_PSK: return F("WPA3-PSK");
+    case WIFI_AUTH_WPA2_WPA3_PSK: return F("WPA2/WPA3-PSK");
+    case WIFI_AUTH_WAPI_PSK: return F("WAPI-PSK");
+    default: return F("Desconocido");
+  }
+}
+
 Preferences g_prefs;
 WebServer g_server(80);
 
 bool g_firmwareUploadHandled = false;
 bool g_firmwareUpdateShouldRestart = false;
 String g_firmwareUpdateMessage;
+
+static bool wifi_sta_running   = false;
+static bool wifi_sta_connected = false;
+static bool wifi_sta_has_ip    = false;
+static bool wifi_ap_running    = false;
+static IPAddress wifi_sta_ip;
+static IPAddress wifi_ap_ip;
+static String wifi_sta_ssid_current;
 
 bool isFactoryResetPressed()
 {
@@ -223,7 +316,7 @@ void onWiFiEvent(WiFiEvent_t event)
   switch (event) {
     case ARDUINO_EVENT_ETH_START:
       Serial.println("[ETH] START");
-      ETH.setHostname("esp32-artnet");
+      ETH.setHostname(DEVICE_HOSTNAME);
       break;
     case ARDUINO_EVENT_ETH_CONNECTED:
       Serial.println("[ETH] LINK UP");
@@ -243,6 +336,52 @@ void onWiFiEvent(WiFiEvent_t event)
       Serial.println("[ETH] STOP");
       eth_link_up = false;
       eth_has_ip  = false;
+      break;
+    case ARDUINO_EVENT_WIFI_STA_START:
+      Serial.println("[WIFI] STA start");
+      wifi_sta_running = true;
+      wifi_sta_connected = false;
+      wifi_sta_has_ip = false;
+      wifi_sta_ip = IPAddress((uint32_t)0);
+      break;
+    case ARDUINO_EVENT_WIFI_STA_CONNECTED:
+      Serial.println("[WIFI] STA connected");
+      wifi_sta_connected = true;
+      wifi_sta_ssid_current = WiFi.SSID();
+      break;
+    case ARDUINO_EVENT_WIFI_STA_GOT_IP:
+      Serial.print("[WIFI] STA IP: ");
+      Serial.println(WiFi.localIP());
+      wifi_sta_has_ip = true;
+      wifi_sta_ip = WiFi.localIP();
+      break;
+    case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
+      Serial.println("[WIFI] STA disconnected");
+      wifi_sta_connected = false;
+      wifi_sta_has_ip = false;
+      wifi_sta_ip = IPAddress((uint32_t)0);
+      wifi_sta_ssid_current.clear();
+      break;
+    case ARDUINO_EVENT_WIFI_STA_STOP:
+      Serial.println("[WIFI] STA stop");
+      wifi_sta_running = false;
+      wifi_sta_connected = false;
+      wifi_sta_has_ip = false;
+      wifi_sta_ip = IPAddress((uint32_t)0);
+      wifi_sta_ssid_current.clear();
+      break;
+    case ARDUINO_EVENT_WIFI_AP_START:
+      Serial.println("[WIFI] AP start");
+      wifi_ap_running = true;
+      wifi_ap_ip = WiFi.softAPIP();
+      break;
+    case ARDUINO_EVENT_WIFI_AP_STOP:
+      Serial.println("[WIFI] AP stop");
+      wifi_ap_running = false;
+      wifi_ap_ip = IPAddress((uint32_t)0);
+      break;
+    case ARDUINO_EVENT_WIFI_AP_STAIPASSIGNED:
+      wifi_ap_ip = WiFi.softAPIP();
       break;
     default:
       break;
@@ -349,6 +488,31 @@ void normalizeConfig(AppConfig& config)
   config.colorOrder = clampIndex(config.colorOrder, static_cast<uint8_t>(LedColorOrder::COLOR_ORDER_COUNT), DEFAULT_COLOR_ORDER);
   config.useDhcp = config.useDhcp ? true : false;
   config.fallbackToStatic = config.fallbackToStatic ? true : false;
+  config.wifiEnabled = config.wifiEnabled ? true : false;
+  config.wifiApMode  = config.wifiApMode ? true : false;
+
+  config.wifiStaSsid.trim();
+  config.wifiStaPassword.trim();
+  config.wifiApSsid.trim();
+  config.wifiApPassword.trim();
+
+  if (config.wifiStaSsid.length() > 32) {
+    config.wifiStaSsid = config.wifiStaSsid.substring(0, 32);
+  }
+  if (config.wifiStaPassword.length() > 64) {
+    config.wifiStaPassword = config.wifiStaPassword.substring(0, 64);
+  }
+  if (config.wifiApSsid.length() == 0) {
+    config.wifiApSsid = DEFAULT_WIFI_AP_SSID;
+  } else if (config.wifiApSsid.length() > 32) {
+    config.wifiApSsid = config.wifiApSsid.substring(0, 32);
+  }
+  if (config.wifiApPassword.length() > 0 && config.wifiApPassword.length() < 8) {
+    config.wifiApPassword.clear();
+  }
+  if (config.wifiApPassword.length() > 64) {
+    config.wifiApPassword = config.wifiApPassword.substring(0, 64);
+  }
 
   if (config.staticSubnet == 0) {
     config.staticSubnet = DEFAULT_STATIC_MASK;
@@ -438,6 +602,12 @@ void loadConfig()
     g_config.staticSubnet    = g_prefs.getUInt("staticMask", g_config.staticSubnet);
     g_config.staticDns1      = g_prefs.getUInt("staticDns1", g_config.staticDns1);
     g_config.staticDns2      = g_prefs.getUInt("staticDns2", g_config.staticDns2);
+    g_config.wifiEnabled     = g_prefs.getBool("wifiEnabled", g_config.wifiEnabled);
+    g_config.wifiApMode      = g_prefs.getBool("wifiApMode", g_config.wifiApMode);
+    g_config.wifiStaSsid     = g_prefs.getString("wifiStaSsid", g_config.wifiStaSsid);
+    g_config.wifiStaPassword = g_prefs.getString("wifiStaPass", g_config.wifiStaPassword);
+    g_config.wifiApSsid      = g_prefs.getString("wifiApSsid", g_config.wifiApSsid);
+    g_config.wifiApPassword  = g_prefs.getString("wifiApPass", g_config.wifiApPassword);
     g_prefs.end();
   }
 
@@ -461,6 +631,12 @@ void saveConfig()
     g_prefs.putUInt("staticMask", g_config.staticSubnet);
     g_prefs.putUInt("staticDns1", g_config.staticDns1);
     g_prefs.putUInt("staticDns2", g_config.staticDns2);
+    g_prefs.putBool("wifiEnabled", g_config.wifiEnabled);
+    g_prefs.putBool("wifiApMode", g_config.wifiApMode);
+    g_prefs.putString("wifiStaSsid", g_config.wifiStaSsid);
+    g_prefs.putString("wifiStaPass", g_config.wifiStaPassword);
+    g_prefs.putString("wifiApSsid", g_config.wifiApSsid);
+    g_prefs.putString("wifiApPass", g_config.wifiApPassword);
     g_prefs.end();
   }
 }
@@ -481,7 +657,7 @@ void applyConfig()
 String buildConfigPage(const String& message)
 {
   String html;
-  html.reserve(4096);
+  html.reserve(8192);
   const bool usingDhcp = g_config.useDhcp;
   const String fallbackLabel = g_config.fallbackToStatic ? "Aplicar IP fija configurada" : "Mantener sin IP";
   const String staticIpStr   = ipToString(g_config.staticIp);
@@ -489,17 +665,50 @@ String buildConfigPage(const String& message)
   const String staticMaskStr = ipToString(g_config.staticSubnet);
   const String staticDns1Str = ipToString(g_config.staticDns1);
   const String staticDns2Str = ipToString(g_config.staticDns2);
+  const bool   wifiEnabled   = g_config.wifiEnabled;
+  const bool   wifiApMode    = g_config.wifiApMode;
+  const String wifiStaSsidEsc = htmlEscape(g_config.wifiStaSsid);
+  const String wifiStaPassEsc = htmlEscape(g_config.wifiStaPassword);
+  const String wifiApSsidEsc  = htmlEscape(g_config.wifiApSsid);
+  const String wifiApPassEsc  = htmlEscape(g_config.wifiApPassword);
+  IPAddress wifiCurrentIp = wifi_sta_has_ip ? wifi_sta_ip : (wifi_ap_running ? wifi_ap_ip : IPAddress((uint32_t)0));
+  String wifiIpStr = wifiCurrentIp != IPAddress((uint32_t)0) ? wifiCurrentIp.toString() : String("-");
+  String wifiStatusText;
+  if (!wifiEnabled) {
+    wifiStatusText = F("Deshabilitado");
+  } else if (wifiApMode) {
+    wifiStatusText = wifi_ap_running ? F("AP activo") : F("Inicializando AP");
+  } else {
+    if (wifi_sta_connected) {
+      wifiStatusText = wifi_sta_has_ip ? F("Conectado") : F("Sin IP (conectando)");
+    } else {
+      wifiStatusText = F("Buscando red…");
+    }
+  }
+  String wifiModeLabel = wifiApMode ? F("Punto de acceso") : F("Cliente");
+  String wifiSsidLabel = wifiApMode ? g_config.wifiApSsid : (wifi_sta_ssid_current.length() ? wifi_sta_ssid_current : g_config.wifiStaSsid);
+  wifiSsidLabel.trim();
+  if (wifiSsidLabel.length() == 0) {
+    wifiSsidLabel = F("(no configurado)");
+  }
+  String wifiSsidStatus = htmlEscape(wifiSsidLabel);
+  String wifiClientsStr = (wifiEnabled && wifiApMode) ? String(WiFi.softAPgetStationNum()) : String("-");
+
   html += F("<!DOCTYPE html><html lang='es'><head><meta charset='utf-8'>");
   html += F("<meta name='viewport' content='width=device-width,initial-scale=1'>");
   html += F("<title>PixelEtherLED - Configuración</title>");
   html += F("<style>body{font-family:Segoe UI,Helvetica,Arial,sans-serif;background:#0c0f1a;color:#f0f0f0;margin:0;padding:0;}\n");
   html += F("header{background:#121a2a;padding:1.5rem;text-align:center;}\n");
-  html += F("h1{margin:0;font-size:1.8rem;}\nsection{padding:1.5rem;}\nform{max-width:640px;margin:0 auto;background:#141d30;padding:1.5rem;border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,0.45);}\n");
-  html += F("label{display:block;margin-bottom:0.35rem;font-weight:600;}\ninput[type=number],input[type=text],select{width:100%;padding:0.65rem;border-radius:8px;border:1px solid #23314d;background:#0c1424;color:#f0f0f0;margin-bottom:1rem;}\n");
+  html += F("h1{margin:0;font-size:1.8rem;}\nsection{padding:1.5rem;}\nform{max-width:720px;margin:0 auto;background:#141d30;padding:1.5rem;border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,0.45);}\n");
+  html += F("label{display:block;margin-bottom:0.35rem;font-weight:600;}\ninput[type=number],input[type=text],input[type=password],select{width:100%;padding:0.65rem;border-radius:8px;border:1px solid #23314d;background:#0c1424;color:#f0f0f0;margin-bottom:1rem;}\n");
   html += F("button{width:100%;padding:0.85rem;background:#3478f6;color:#fff;border:none;border-radius:8px;font-size:1rem;font-weight:600;cursor:pointer;}\nbutton:hover{background:#255fcb;}\n");
-  html += F(".card{max-width:640px;margin:1.5rem auto;background:#141d30;padding:1.5rem;border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,0.45);}\n");
+  html += F("button.secondary{width:auto;display:inline-block;margin:0.25rem 0 0.75rem;background:#1f2b44;}\nbutton.secondary:hover{background:#263355;}\n");
+  html += F(".card{max-width:720px;margin:1.5rem auto;background:#141d30;padding:1.5rem;border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,0.45);}\n");
   html += F(".grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:1rem;}\nfooter{text-align:center;padding:1rem;color:#96a2c5;font-size:0.85rem;}\n");
   html += F(".message{margin-bottom:1rem;padding:0.75rem 1rem;border-radius:8px;background:#1f2b44;color:#a3ffb0;}\n");
+  html += F(".section-title{margin-top:1.5rem;font-size:1.05rem;color:#9bb3ff;text-transform:uppercase;letter-spacing:0.05em;}\n");
+  html += F(".wifi-group{margin-bottom:1rem;padding:1rem;background:#101829;border-radius:10px;border:1px solid #23314d;}\n");
+  html += F(".wifi-scan{margin-top:0.5rem;font-size:0.9rem;color:#cfd8f7;}\n.wifi-scan div{padding:0.35rem 0;border-bottom:1px solid #23314d;}\n.wifi-scan div:last-child{border-bottom:none;}\n.wifi-scan strong{display:block;margin-bottom:0.1rem;}\n");
   html += F("input[type=file]{width:100%;margin-bottom:1rem;}\n</style></head><body>");
   html += F("<header><h1>PixelEtherLED</h1><p>Panel de configuración avanzada</p></header>");
   html += F("<section>");
@@ -509,6 +718,7 @@ String buildConfigPage(const String& message)
     html += F("</div>");
   }
   html += F("<form method='post' action='/config'>");
+  html += F("<h2 class='section-title'>Ethernet</h2>");
   html += F("<label for='dhcpTimeout'>Tiempo de espera DHCP (ms)</label>");
   html += "<input type='number' id='dhcpTimeout' name='dhcpTimeout' min='500' max='60000' value='" + String(g_config.dhcpTimeoutMs) + "'>";
   html += F("<label for='networkMode'>Modo de red</label>");
@@ -531,6 +741,36 @@ String buildConfigPage(const String& message)
   html += "<input type='text' id='staticDns1' name='staticDns1' value='" + staticDns1Str + "'>";
   html += F("<label for='staticDns2'>DNS secundario</label>");
   html += "<input type='text' id='staticDns2' name='staticDns2' value='" + staticDns2Str + "'>";
+
+  html += F("<h2 class='section-title'>Wi-Fi</h2>");
+  html += F("<label for='wifiEnabled'>Wi-Fi</label>");
+  html += F("<select id='wifiEnabled' name='wifiEnabled'>");
+  html += String("<option value='1'") + (wifiEnabled ? " selected" : "") + ">Habilitado</option>";
+  html += String("<option value='0'") + (!wifiEnabled ? " selected" : "") + ">Deshabilitado</option>";
+  html += F("</select>");
+  html += F("<label for='wifiMode'>Modo Wi-Fi</label>");
+  html += F("<select id='wifiMode' name='wifiMode'>");
+  html += String("<option value='ap'") + (wifiApMode ? " selected" : "") + ">Punto de acceso</option>";
+  html += String("<option value='sta'") + (!wifiApMode ? " selected" : "") + ">Cliente (unirse a red)</option>";
+  html += F("</select>");
+  html += F("<div id='wifiStaConfig' class='wifi-group'>");
+  html += F("<label for='wifiStaSsid'>SSID</label>");
+  html += "<input type='text' id='wifiStaSsid' name='wifiStaSsid' list='wifiNetworks' value='" + wifiStaSsidEsc + "'>";
+  html += F("<datalist id='wifiNetworks'></datalist>");
+  html += F("<label for='wifiStaPassword'>Contraseña</label>");
+  html += "<input type='password' id='wifiStaPassword' name='wifiStaPassword' value='" + wifiStaPassEsc + "'>";
+  html += F("<button type='button' class='secondary' id='wifiScanButton'>Escanear redes Wi-Fi</button>");
+  html += F("<div id='wifiScanResults' class='wifi-scan'></div>");
+  html += F("</div>");
+  html += F("<div id='wifiApConfig' class='wifi-group'>");
+  html += F("<label for='wifiApSsid'>SSID del punto de acceso</label>");
+  html += "<input type='text' id='wifiApSsid' name='wifiApSsid' value='" + wifiApSsidEsc + "'>";
+  html += F("<label for='wifiApPassword'>Contraseña (mínimo 8 caracteres, dejar vacío para abierto)</label>");
+  html += "<input type='password' id='wifiApPassword' name='wifiApPassword' value='" + wifiApPassEsc + "'>";
+  html += F("<p style='margin:0;font-size:0.85rem;color:#96a2c5;'>Los cambios Wi-Fi se aplican inmediatamente al guardar.</p>");
+  html += F("</div>");
+
+  html += F("<h2 class='section-title'>LEDs</h2>");
   html += F("<label for='numLeds'>Cantidad de LEDs activos</label>");
   html += "<input type='number' id='numLeds' name='numLeds' min='1' max='" + String(MAX_LEDS) + "' value='" + String(g_config.numLeds) + "'>";
   html += F("<label for='startUniverse'>Universo Art-Net inicial</label>");
@@ -561,9 +801,10 @@ String buildConfigPage(const String& message)
   html += F("</select>");
   html += F("<button type='submit'>Guardar configuración</button>");
   html += F("</form>");
+
   html += F("<div class='card'>");
   html += F("<h2>Estado del sistema</h2><div class='grid'>");
-  html += "<div><strong>IP actual:</strong><br>" + ETH.localIP().toString() + "</div>";
+  html += "<div><strong>IP Ethernet:</strong><br>" + ETH.localIP().toString() + "</div>";
   html += "<div><strong>Link Ethernet:</strong><br>" + String(eth_link_up ? "activo" : "desconectado") + "</div>";
   html += "<div><strong>Modo de red:</strong><br>" + String(usingDhcp ? "DHCP" : "IP fija") + "</div>";
   html += "<div><strong>Fallback DHCP:</strong><br>" + fallbackLabel + "</div>";
@@ -571,6 +812,11 @@ String buildConfigPage(const String& message)
   html += "<div><strong>Gateway:</strong><br>" + staticGwStr + "</div>";
   html += "<div><strong>Máscara:</strong><br>" + staticMaskStr + "</div>";
   html += "<div><strong>DNS:</strong><br>" + staticDns1Str + " / " + staticDns2Str + "</div>";
+  html += "<div><strong>Wi-Fi:</strong><br>" + wifiStatusText + "</div>";
+  html += "<div><strong>Modo Wi-Fi:</strong><br>" + wifiModeLabel + "</div>";
+  html += "<div><strong>SSID:</strong><br>" + wifiSsidStatus + "</div>";
+  html += "<div><strong>IP Wi-Fi:</strong><br>" + wifiIpStr + "</div>";
+  html += "<div><strong>Clientes Wi-Fi:</strong><br>" + wifiClientsStr + "</div>";
   html += "<div><strong>Universos:</strong><br>" + String(g_universeCount) + " (desde " + String(g_config.startUniverse) + ")";
   html += "</div><div><strong>Frames DMX:</strong><br>" + String((unsigned long)g_dmxFrames) + "</div>";
   html += "<div><strong>Brillo:</strong><br>" + String(g_config.brightness) + "/255";
@@ -578,9 +824,11 @@ String buildConfigPage(const String& message)
   html += "</div><div><strong>Chip LED:</strong><br>" + String(getChipName(g_config.chipType)) + "</div>";
   html += "<div><strong>Orden:</strong><br>" + String(getColorOrderName(g_config.colorOrder)) + "</div>";
   html += F("</div></div>");
+
   html += F("<div class='card'>");
   html += F("<h2>Consejos</h2><ul><li>Si ampliás la tira LED, incrementá el parámetro <em>Cantidad de LEDs activos</em>.</li><li>Reducí el brillo máximo para ahorrar consumo o evitar saturación.</li><li>Ajustá el tiempo de espera de DHCP si tu red tarda más en asignar IP.</li><li>El valor de pixeles por universo determina cuántos LEDs se controlan por paquete Art-Net.</li></ul>");
   html += F("</div>");
+
   html += F("<div class='card'>");
   html += F("<h2>Actualizar firmware</h2>");
   html += F("<form method='post' action='/update' enctype='multipart/form-data'>");
@@ -590,7 +838,9 @@ String buildConfigPage(const String& message)
   html += F("</form>");
   html += F("<p style='margin-top:0.75rem;font-size:0.9rem;color:#96a2c5;'>El dispositivo se reiniciará automáticamente luego de una actualización exitosa.</p>");
   html += F("</div>");
-  html += F("</section><footer>PixelEtherLED &bull; Panel de control web</footer></body></html>");
+
+  html += F("</section><footer>PixelEtherLED &bull; Panel de control web</footer>");
+  html += F("<script>const wifiEnabledEl=document.getElementById(\"wifiEnabled\");const wifiModeEl=document.getElementById(\"wifiMode\");const wifiStaEl=document.getElementById(\"wifiStaConfig\");const wifiApEl=document.getElementById(\"wifiApConfig\");const scanBtn=document.getElementById(\"wifiScanButton\");const wifiScanResults=document.getElementById(\"wifiScanResults\");const wifiNetworkList=document.getElementById(\"wifiNetworks\");function updateWifiVisibility(){const enabled=wifiEnabledEl.value===\"1\";const mode=wifiModeEl.value;wifiStaEl.style.display=(enabled&&mode===\"sta\")?\"block\":\"none\";wifiApEl.style.display=(enabled&&mode===\"ap\")?\"block\":\"none\";}updateWifiVisibility();wifiEnabledEl.addEventListener(\"change\",updateWifiVisibility);wifiModeEl.addEventListener(\"change\",updateWifiVisibility);function scanWifi(){if(!wifiScanResults)return;wifiScanResults.textContent=\"Buscando redes...\";if(wifiNetworkList){while(wifiNetworkList.firstChild){wifiNetworkList.removeChild(wifiNetworkList.firstChild);}}fetch(\"/wifi_scan\").then(function(res){if(!res.ok){throw new Error(\"http\");}return res.json();}).then(function(data){if(!data||!Array.isArray(data.networks)||data.networks.length===0){wifiScanResults.textContent=\"No se encontraron redes.\";return;}wifiScanResults.textContent=\"\";data.networks.forEach(function(net){var container=document.createElement(\"div\");var title=document.createElement(\"strong\");title.textContent=(net.ssid&&net.ssid.length)?net.ssid:\"(sin SSID)\";container.appendChild(title);container.appendChild(document.createElement(\"br\"));var details=document.createElement(\"span\");details.textContent=\"Señal: \"+net.rssi+\" dBm · \"+net.secure+\" · Canal \"+net.channel;container.appendChild(details);wifiScanResults.appendChild(container);if(wifiNetworkList){var opt=document.createElement(\"option\");opt.value=net.ssid||\"\";wifiNetworkList.appendChild(opt);}});}).catch(function(){wifiScanResults.textContent=\"No se pudo completar el escaneo.\";});}if(scanBtn){scanBtn.addEventListener(\"click\",scanWifi);}</script></body></html>");
   return html;
 }
 
@@ -617,6 +867,27 @@ void handleConfigPost()
   }
   if (g_server.hasArg("fallbackToStatic")) {
     newConfig.fallbackToStatic = g_server.arg("fallbackToStatic") == "1";
+  }
+  if (g_server.hasArg("wifiEnabled")) {
+    newConfig.wifiEnabled = g_server.arg("wifiEnabled") == "1";
+  }
+  if (g_server.hasArg("wifiMode")) {
+    String mode = g_server.arg("wifiMode");
+    mode.trim();
+    mode.toLowerCase();
+    newConfig.wifiApMode = (mode != "sta");
+  }
+  if (g_server.hasArg("wifiStaSsid")) {
+    newConfig.wifiStaSsid = g_server.arg("wifiStaSsid");
+  }
+  if (g_server.hasArg("wifiStaPassword")) {
+    newConfig.wifiStaPassword = g_server.arg("wifiStaPassword");
+  }
+  if (g_server.hasArg("wifiApSsid")) {
+    newConfig.wifiApSsid = g_server.arg("wifiApSsid");
+  }
+  if (g_server.hasArg("wifiApPassword")) {
+    newConfig.wifiApPassword = g_server.arg("wifiApPassword");
   }
   if (g_server.hasArg("staticIp")) {
     String value = g_server.arg("staticIp");
@@ -682,6 +953,8 @@ void handleConfigPost()
   g_config = newConfig;
   applyConfig();
   saveConfig();
+  bringUpEthernet(g_config);
+  bringUpWiFi(g_config);
 
   if (requiresRestart) {
     g_server.send(200, "text/html", buildConfigPage("Configuración actualizada. Reiniciando para aplicar tipo de chip/orden de color."));
@@ -769,6 +1042,88 @@ void handleFirmwareUpdatePost()
   }
 }
 
+void bringUpWiFi(const AppConfig& config)
+{
+  WiFi.scanDelete();
+  WiFi.softAPdisconnect(true);
+  WiFi.disconnect(true, true);
+  WiFi.mode(WIFI_OFF);
+  delay(50);
+
+  wifi_sta_running = false;
+  wifi_sta_connected = false;
+  wifi_sta_has_ip = false;
+  wifi_ap_running = false;
+  wifi_sta_ip = IPAddress((uint32_t)0);
+  wifi_ap_ip = IPAddress((uint32_t)0);
+  wifi_sta_ssid_current.clear();
+
+  if (!config.wifiEnabled) {
+    Serial.println("[WIFI] Deshabilitado.");
+    return;
+  }
+
+  if (config.wifiApMode) {
+    Serial.print("[WIFI] Activando punto de acceso: ");
+    Serial.println(config.wifiApSsid);
+    WiFi.mode(WIFI_AP);
+    bool ok = false;
+    if (config.wifiApPassword.length() >= 8) {
+      ok = WiFi.softAP(config.wifiApSsid.c_str(), config.wifiApPassword.c_str());
+    } else {
+      ok = WiFi.softAP(config.wifiApSsid.c_str());
+    }
+    if (ok) {
+      WiFi.softAPsetHostname(DEVICE_HOSTNAME);
+      wifi_ap_running = true;
+      wifi_ap_ip = WiFi.softAPIP();
+      Serial.print("[WIFI] AP IP: ");
+      Serial.println(wifi_ap_ip);
+    } else {
+      Serial.println("[WIFI] softAP() falló");
+    }
+  } else {
+    if (config.wifiStaSsid.length() == 0) {
+      Serial.println("[WIFI] SSID no configurado; no se intentará conectar.");
+      return;
+    }
+
+    Serial.print("[WIFI] Conectando a SSID: ");
+    Serial.println(config.wifiStaSsid);
+    WiFi.mode(WIFI_STA);
+    WiFi.setHostname(DEVICE_HOSTNAME);
+    WiFi.setAutoReconnect(true);
+    WiFi.begin(config.wifiStaSsid.c_str(), config.wifiStaPassword.c_str());
+
+    const uint32_t t0 = millis();
+    while (millis() - t0 < config.dhcpTimeoutMs) {
+      if (WiFi.status() == WL_CONNECTED) {
+        break;
+      }
+      if (wifi_sta_has_ip) {
+        break;
+      }
+      Serial.print('.');
+      delay(250);
+    }
+    Serial.println();
+
+    if (WiFi.status() == WL_CONNECTED) {
+      wifi_sta_connected = true;
+      wifi_sta_has_ip = true;
+      wifi_sta_ip = WiFi.localIP();
+      wifi_sta_ssid_current = WiFi.SSID();
+      Serial.print("[WIFI] IP obtenida: ");
+      Serial.println(wifi_sta_ip);
+    } else if (wifi_sta_has_ip) {
+      Serial.print("[WIFI] IP actual: ");
+      Serial.println(wifi_sta_ip);
+    } else {
+      Serial.println("[WIFI] No se obtuvo conexión/IP en el tiempo configurado.");
+    }
+  }
+}
+
 void bringUpEthernet(const AppConfig& config)
 {
   eth_link_up = false;
@@ -831,6 +1186,38 @@ void bringUpEthernet(const AppConfig& config)
   }
 }
 
+void handleWifiScan()
+{
+  int16_t n = WiFi.scanNetworks(/*async=*/false, /*show_hidden=*/true);
+  if (n < 0) {
+    g_server.send(500, "application/json", F("{\"error\":\"scan_failed\"}"));
+    return;
+  }
+
+  String json = F("{\"networks\":[");
+  for (int16_t i = 0; i < n; ++i) {
+    if (i > 0) json += ',';
+    String ssid = WiFi.SSID(i);
+    int32_t rssi = WiFi.RSSI(i);
+    wifi_auth_mode_t mode = WiFi.encryptionType(i);
+    int32_t channel = WiFi.channel(i);
+    json += F("{\"ssid\":\"");
+    json += jsonEscape(ssid);
+    json += F("\",\"rssi\":");
+    json += String(rssi);
+    json += F(",\"secure\":\"");
+    json += wifiAuthModeToText(mode);
+    json += F("\",\"channel\":");
+    json += String(channel);
+    json += F("}");
+  }
+  json += F("]}");
+
+  g_server.sendHeader("Cache-Control", "no-store");
+  g_server.send(200, "application/json", json);
+  WiFi.scanDelete();
+}
+
 void setup()
 {
   Serial.begin(115200);
@@ -850,7 +1237,9 @@ void setup()
   applyConfig();
 
   WiFi.onEvent(onWiFiEvent);
+  WiFi.persistent(false);
   bringUpEthernet(g_config);
+  bringUpWiFi(g_config);
 
   artnet.setNodeNames("PixelEtherLED", "PixelEtherLED Controller");
   artnet.begin();                      // responde a ArtPoll → Jinx "Scan"
@@ -861,12 +1250,18 @@ void setup()
   g_server.on("/config", HTTP_POST, handleConfigPost);
   g_server.on("/update", HTTP_GET, handleRoot);
   g_server.on("/update", HTTP_POST, handleFirmwareUpdatePost, handleFirmwareUpload);
+  g_server.on("/wifi_scan", HTTP_GET, handleWifiScan);
   g_server.begin();
 
   Serial.println("[ARTNET] Listo");
   Serial.printf("  Universos: %u (desde %u)\n", g_universeCount, g_config.startUniverse);
   Serial.printf("  LEDs: %u, pix/universo: %u\n", g_config.numLeds, g_config.pixelsPerUniverse);
   Serial.print("  IP actual: "); Serial.println(ETH.localIP());
+  IPAddress wifiIp = WiFi.localIP();
+  if (wifiIp == IPAddress((uint32_t)0)) {
+    wifiIp = WiFi.softAPIP();
+  }
+  Serial.print("  Wi-Fi IP: "); Serial.println(wifiIp);
 }
 
 void loop()
