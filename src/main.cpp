@@ -481,7 +481,7 @@ bool checkFactoryResetOnBoot()
   if (FACTORY_RESET_ACTIVE_LOW) {
     pinMode(FACTORY_RESET_PIN, INPUT_PULLUP);
   } else {
-    pinMode(FACTORY_RESET_PIN, INPUT);
+    pinMode(FACTORY_RESET_PIN, INPUT_PULLDOWN);
   }
 
   if (!isFactoryResetPressed()) {
