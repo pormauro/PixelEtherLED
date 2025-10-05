@@ -121,6 +121,8 @@ void handleWifiScan();
 String htmlEscape(const String& text);
 String jsonEscape(const String& text);
 String wifiAuthModeToText(wifi_auth_mode_t mode);
+const char* getChipName(uint8_t value);
+const char* getColorOrderName(uint8_t value);
 
 AppConfig g_config = makeDefaultConfig();
 
