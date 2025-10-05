@@ -316,7 +316,109 @@ String renderConfigPage(const AppConfig& config,
 
   html += F("</div><footer>PixelEtherLED &bull; Panel de control web</footer>");
 
-  html += F("<script>const wifiEnabledEl=document.getElementById('wifiEnabled');const wifiModeEl=document.getElementById('wifiMode');const wifiStaEl=document.getElementById('wifiStaConfig');const wifiApEl=document.getElementById('wifiApConfig');const scanBtn=document.getElementById('wifiScanButton');const wifiScanResults=document.getElementById('wifiScanResults');const wifiScanStatus=document.getElementById('wifiScanStatus');const wifiNetworkList=document.getElementById('wifiNetworks');function updateWifiVisibility(){const enabled=wifiEnabledEl.value==='1';const mode=wifiModeEl.value;wifiStaEl.style.display=(enabled&&mode==='sta')?'block':'none';wifiApEl.style.display=(enabled&&mode==='ap')?'block':'none';}updateWifiVisibility();wifiEnabledEl.addEventListener('change',updateWifiVisibility);wifiModeEl.addEventListener('change',updateWifiVisibility);function setScanStatus(text,scanning){if(!wifiScanStatus)return;wifiScanStatus.textContent='';if(scanning){const icon=document.createElement('span');icon.className='pulse';icon.textContent='📡';wifiScanStatus.appendChild(icon);wifiScanStatus.appendChild(document.createTextNode(' '+text));wifiScanStatus.classList.add('scanning');}else{wifiScanStatus.textContent=text;wifiScanStatus.classList.remove('scanning');}}function signalBars(rssi){if(rssi>=-55)return'📶📶📶';if(rssi>=-65)return'📶📶';if(rssi>=-75)return'📶';return'▫️';}function scanWifi(){if(!wifiScanResults)return;wifiScanResults.innerHTML='';setScanStatus('Escaneando redes…',true);if(wifiNetworkList){while(wifiNetworkList.firstChild){wifiNetworkList.removeChild(wifiNetworkList.firstChild);}}fetch('/wifi_scan').then(function(res){if(!res.ok){throw new Error('http');}return res.json();}).then(function(data){if(!data||!Array.isArray(data.networks)||data.networks.length===0){setScanStatus('No se encontraron redes.',false);return;}setScanStatus('Redes disponibles',false);data.networks.forEach(function(net){var container=document.createElement('div');container.className='wifi-scan-entry';var title=document.createElement('strong');title.innerHTML='<span class="signal">'+signalBars(net.rssi)+'</span>'+(net.ssid&&net.ssid.length?net.ssid:'(sin SSID)');container.appendChild(title);var details=document.createElement('div');details.textContent='Señal: '+net.rssi+' dBm · '+net.secure+' · Canal '+net.channel;container.appendChild(details);wifiScanResults.appendChild(container);if(wifiNetworkList){var opt=document.createElement('option');opt.value=net.ssid||'';wifiNetworkList.appendChild(opt);}});}).catch(function(){setScanStatus('No se pudo completar el escaneo.',false);});}if(scanBtn){scanBtn.addEventListener('click',scanWifi);}</script>");
+  static const char PROGMEM kWifiScript[] = R"rawliteral(
+<script>
+const wifiEnabledEl = document.getElementById('wifiEnabled');
+const wifiModeEl = document.getElementById('wifiMode');
+const wifiStaEl = document.getElementById('wifiStaConfig');
+const wifiApEl = document.getElementById('wifiApConfig');
+const scanBtn = document.getElementById('wifiScanButton');
+const wifiScanResults = document.getElementById('wifiScanResults');
+const wifiScanStatus = document.getElementById('wifiScanStatus');
+const wifiNetworkList = document.getElementById('wifiNetworks');
+
+function updateWifiVisibility() {
+  const enabled = wifiEnabledEl.value === '1';
+  const mode = wifiModeEl.value;
+  wifiStaEl.style.display = (enabled && mode === 'sta') ? 'block' : 'none';
+  wifiApEl.style.display = (enabled && mode === 'ap') ? 'block' : 'none';
+}
+
+updateWifiVisibility();
+wifiEnabledEl.addEventListener('change', updateWifiVisibility);
+wifiModeEl.addEventListener('change', updateWifiVisibility);
+
+function setScanStatus(text, scanning) {
+  if (!wifiScanStatus) return;
+  wifiScanStatus.textContent = '';
+  if (scanning) {
+    const icon = document.createElement('span');
+    icon.className = 'pulse';
+    icon.textContent = '📡';
+    wifiScanStatus.appendChild(icon);
+    wifiScanStatus.appendChild(document.createTextNode(' ' + text));
+    wifiScanStatus.classList.add('scanning');
+  } else {
+    wifiScanStatus.textContent = text;
+    wifiScanStatus.classList.remove('scanning');
+  }
+}
+
+function signalBars(rssi) {
+  if (rssi >= -55) return '📶📶📶';
+  if (rssi >= -65) return '📶📶';
+  if (rssi >= -75) return '📶';
+  return '▫️';
+}
+
+function scanWifi() {
+  if (!wifiScanResults) return;
+  wifiScanResults.innerHTML = '';
+  setScanStatus('Escaneando redes…', true);
+  if (wifiNetworkList) {
+    while (wifiNetworkList.firstChild) {
+      wifiNetworkList.removeChild(wifiNetworkList.firstChild);
+    }
+  }
+
+  fetch('/wifi_scan')
+    .then(function(res) {
+      if (!res.ok) {
+        throw new Error('http');
+      }
+      return res.json();
+    })
+    .then(function(data) {
+      if (!data || !Array.isArray(data.networks) || data.networks.length === 0) {
+        setScanStatus('No se encontraron redes.', false);
+        return;
+      }
+
+      setScanStatus('Redes disponibles', false);
+      data.networks.forEach(function(net) {
+        var container = document.createElement('div');
+        container.className = 'wifi-scan-entry';
+
+        var title = document.createElement('strong');
+        title.innerHTML = '<span class=\"signal\">' + signalBars(net.rssi) + '</span>' +
+                          (net.ssid && net.ssid.length ? net.ssid : '(sin SSID)');
+        container.appendChild(title);
+
+        var details = document.createElement('div');
+        details.textContent = 'Señal: ' + net.rssi + ' dBm · ' + net.secure + ' · Canal ' + net.channel;
+        container.appendChild(details);
+
+        wifiScanResults.appendChild(container);
+
+        if (wifiNetworkList) {
+          var opt = document.createElement('option');
+          opt.value = net.ssid || '';
+          wifiNetworkList.appendChild(opt);
+        }
+      });
+    })
+    .catch(function() {
+      setScanStatus('No se pudo completar el escaneo.', false);
+    });
+}
+
+if (scanBtn) {
+  scanBtn.addEventListener('click', scanWifi);
+}
+</script>
+)rawliteral";
+
+  html += FPSTR(kWifiScript);
   html += F("</body></html>");
 
   return html;
