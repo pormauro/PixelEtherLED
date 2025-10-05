@@ -32,6 +32,7 @@ const char* const  DEFAULT_WIFI_STA_SSID      = "";
 const char* const  DEFAULT_WIFI_STA_PASSWORD  = "";
 const char* const  DEFAULT_WIFI_AP_SSID       = "PixelEtherLED";
 const char* const  DEFAULT_WIFI_AP_PASSWORD   = "";
+constexpr uint8_t  DEFAULT_ARTNET_INPUT       = static_cast<uint8_t>(ArtNetNode::InterfacePreference::Ethernet);
 constexpr const char* DEVICE_HOSTNAME         = "esp32-artnet";
 const uint32_t DEFAULT_STATIC_IP         = static_cast<uint32_t>(STATIC_IP);
 const uint32_t DEFAULT_STATIC_GW         = static_cast<uint32_t>(STATIC_GW);
@@ -102,6 +103,7 @@ struct AppConfig {
   uint32_t staticDns2;
   bool     wifiEnabled;
   bool     wifiApMode;
+  uint8_t  artnetInput;
   String   wifiStaSsid;
   String   wifiStaPassword;
   String   wifiApSsid;
@@ -145,6 +147,7 @@ AppConfig makeDefaultConfig()
   cfg.staticDns2      = DEFAULT_STATIC_DNS2;
   cfg.wifiEnabled     = DEFAULT_WIFI_ENABLED;
   cfg.wifiApMode      = DEFAULT_WIFI_AP_MODE;
+  cfg.artnetInput     = DEFAULT_ARTNET_INPUT;
   cfg.wifiStaSsid     = DEFAULT_WIFI_STA_SSID;
   cfg.wifiStaPassword = DEFAULT_WIFI_STA_PASSWORD;
   cfg.wifiApSsid      = DEFAULT_WIFI_AP_SSID;
@@ -490,6 +493,8 @@ void normalizeConfig(AppConfig& config)
   config.fallbackToStatic = config.fallbackToStatic ? true : false;
   config.wifiEnabled = config.wifiEnabled ? true : false;
   config.wifiApMode  = config.wifiApMode ? true : false;
+  config.artnetInput = clampValue<uint8_t>(config.artnetInput, 0,
+                                           static_cast<uint8_t>(ArtNetNode::InterfacePreference::Auto));
 
   config.wifiStaSsid.trim();
   config.wifiStaPassword.trim();
@@ -604,6 +609,7 @@ void loadConfig()
     g_config.staticDns2      = g_prefs.getUInt("staticDns2", g_config.staticDns2);
     g_config.wifiEnabled     = g_prefs.getBool("wifiEnabled", g_config.wifiEnabled);
     g_config.wifiApMode      = g_prefs.getBool("wifiApMode", g_config.wifiApMode);
+    g_config.artnetInput     = g_prefs.getUChar("artnetInput", g_config.artnetInput);
     g_config.wifiStaSsid     = g_prefs.getString("wifiStaSsid", g_config.wifiStaSsid);
     g_config.wifiStaPassword = g_prefs.getString("wifiStaPass", g_config.wifiStaPassword);
     g_config.wifiApSsid      = g_prefs.getString("wifiApSsid", g_config.wifiApSsid);
@@ -633,6 +639,7 @@ void saveConfig()
     g_prefs.putUInt("staticDns2", g_config.staticDns2);
     g_prefs.putBool("wifiEnabled", g_config.wifiEnabled);
     g_prefs.putBool("wifiApMode", g_config.wifiApMode);
+    g_prefs.putUChar("artnetInput", g_config.artnetInput);
     g_prefs.putString("wifiStaSsid", g_config.wifiStaSsid);
     g_prefs.putString("wifiStaPass", g_config.wifiStaPassword);
     g_prefs.putString("wifiApSsid", g_config.wifiApSsid);
@@ -650,6 +657,14 @@ void applyConfig()
 
   artnet.setUniverseInfo(g_config.startUniverse, g_universeCount);
 
+  ArtNetNode::InterfacePreference pref = ArtNetNode::InterfacePreference::Ethernet;
+  if (g_config.artnetInput == static_cast<uint8_t>(ArtNetNode::InterfacePreference::WiFi)) {
+    pref = ArtNetNode::InterfacePreference::WiFi;
+  } else if (g_config.artnetInput == static_cast<uint8_t>(ArtNetNode::InterfacePreference::Auto)) {
+    pref = ArtNetNode::InterfacePreference::Auto;
+  }
+  artnet.setInterfacePreference(pref);
+
   FastLED.setBrightness(g_config.brightness);
   FastLED.clear(true);
 }
@@ -658,6 +673,8 @@ String buildConfigPage(const String& message)
 {
   String html;
   html.reserve(8192);
+  artnet.updateNetworkInfo();
+
   const bool usingDhcp = g_config.useDhcp;
   const String fallbackLabel = g_config.fallbackToStatic ? "Aplicar IP fija configurada" : "Mantener sin IP";
   const String staticIpStr   = ipToString(g_config.staticIp);
@@ -667,10 +684,26 @@ String buildConfigPage(const String& message)
   const String staticDns2Str = ipToString(g_config.staticDns2);
   const bool   wifiEnabled   = g_config.wifiEnabled;
   const bool   wifiApMode    = g_config.wifiApMode;
+  const uint8_t artnetInputValue = g_config.artnetInput;
   const String wifiStaSsidEsc = htmlEscape(g_config.wifiStaSsid);
   const String wifiStaPassEsc = htmlEscape(g_config.wifiStaPassword);
   const String wifiApSsidEsc  = htmlEscape(g_config.wifiApSsid);
   const String wifiApPassEsc  = htmlEscape(g_config.wifiApPassword);
+  IPAddress artnetIp = artnet.localIp();
+  String artnetIpStr = artnetIp != IPAddress((uint32_t)0) ? artnetIp.toString() : String("-");
+  String artnetInputLabel;
+  switch (artnetInputValue) {
+    case static_cast<uint8_t>(ArtNetNode::InterfacePreference::WiFi):
+      artnetInputLabel = F("Wi-Fi");
+      break;
+    case static_cast<uint8_t>(ArtNetNode::InterfacePreference::Auto):
+      artnetInputLabel = F("Automático");
+      break;
+    case static_cast<uint8_t>(ArtNetNode::InterfacePreference::Ethernet):
+    default:
+      artnetInputLabel = F("Ethernet");
+      break;
+  }
   IPAddress wifiCurrentIp = wifi_sta_has_ip ? wifi_sta_ip : (wifi_ap_running ? wifi_ap_ip : IPAddress((uint32_t)0));
   String wifiIpStr = wifiCurrentIp != IPAddress((uint32_t)0) ? wifiCurrentIp.toString() : String("-");
   String wifiStatusText;
@@ -693,6 +726,20 @@ String buildConfigPage(const String& message)
   }
   String wifiSsidStatus = htmlEscape(wifiSsidLabel);
   String wifiClientsStr = (wifiEnabled && wifiApMode) ? String(WiFi.softAPgetStationNum()) : String("-");
+  String artnetActiveLabel = F("Sin enlace");
+  if (artnetIp != IPAddress((uint32_t)0)) {
+    if (artnetIp == ETH.localIP()) {
+      artnetActiveLabel = F("Ethernet");
+    } else {
+      IPAddress staIp = WiFi.localIP();
+      IPAddress apIp = WiFi.softAPIP();
+      if (artnetIp == staIp || artnetIp == apIp || artnetIp == wifi_sta_ip || artnetIp == wifi_ap_ip) {
+        artnetActiveLabel = F("Wi-Fi");
+      } else {
+        artnetActiveLabel = F("Desconocido");
+      }
+    }
+  }
 
   html += F("<!DOCTYPE html><html lang='es'><head><meta charset='utf-8'>");
   html += F("<meta name='viewport' content='width=device-width,initial-scale=1'>");
@@ -741,6 +788,14 @@ String buildConfigPage(const String& message)
   html += "<input type='text' id='staticDns1' name='staticDns1' value='" + staticDns1Str + "'>";
   html += F("<label for='staticDns2'>DNS secundario</label>");
   html += "<input type='text' id='staticDns2' name='staticDns2' value='" + staticDns2Str + "'>";
+
+  html += F("<h2 class='section-title'>Art-Net</h2>");
+  html += F("<label for='artnetInput'>Interfaz preferida</label>");
+  html += F("<select id='artnetInput' name='artnetInput'>");
+  html += String("<option value='0'") + (artnetInputValue == 0 ? " selected" : "") + ">Ethernet</option>";
+  html += String("<option value='1'") + (artnetInputValue == 1 ? " selected" : "") + ">Wi-Fi</option>";
+  html += F("</select>");
+  html += F("<p style='margin:-0.5rem 0 1rem;font-size:0.85rem;color:#96a2c5;'>Determiná desde qué interfaz se reciben los datos Art-Net. Si la opción seleccionada no tiene IP, se usará la otra disponible.</p>");
 
   html += F("<h2 class='section-title'>Wi-Fi</h2>");
   html += F("<label for='wifiEnabled'>Wi-Fi</label>");
@@ -808,6 +863,9 @@ String buildConfigPage(const String& message)
   html += "<div><strong>Link Ethernet:</strong><br>" + String(eth_link_up ? "activo" : "desconectado") + "</div>";
   html += "<div><strong>Modo de red:</strong><br>" + String(usingDhcp ? "DHCP" : "IP fija") + "</div>";
   html += "<div><strong>Fallback DHCP:</strong><br>" + fallbackLabel + "</div>";
+  html += "<div><strong>Fuente Art-Net:</strong><br>" + artnetInputLabel + "</div>";
+  html += "<div><strong>Interfaz activa Art-Net:</strong><br>" + artnetActiveLabel + "</div>";
+  html += "<div><strong>IP Art-Net:</strong><br>" + artnetIpStr + "</div>";
   html += "<div><strong>IP fija configurada:</strong><br>" + staticIpStr + "</div>";
   html += "<div><strong>Gateway:</strong><br>" + staticGwStr + "</div>";
   html += "<div><strong>Máscara:</strong><br>" + staticMaskStr + "</div>";
@@ -867,6 +925,11 @@ void handleConfigPost()
   }
   if (g_server.hasArg("fallbackToStatic")) {
     newConfig.fallbackToStatic = g_server.arg("fallbackToStatic") == "1";
+  }
+  if (g_server.hasArg("artnetInput")) {
+    long parsed = g_server.arg("artnetInput").toInt();
+    if (parsed < 0) parsed = DEFAULT_ARTNET_INPUT;
+    newConfig.artnetInput = static_cast<uint8_t>(parsed);
   }
   if (g_server.hasArg("wifiEnabled")) {
     newConfig.wifiEnabled = g_server.arg("wifiEnabled") == "1";
@@ -957,6 +1020,7 @@ void handleConfigPost()
   // Re-initialise Ethernet afterwards so Art-Net binds to the wired interface.
   bringUpWiFi(g_config);
   bringUpEthernet(g_config);
+  artnet.updateNetworkInfo();
 
   if (requiresRestart) {
     g_server.send(200, "text/html", buildConfigPage("Configuración actualizada. Reiniciando para aplicar tipo de chip/orden de color."));
@@ -1244,6 +1308,7 @@ void setup()
   // Re-initialise Ethernet afterwards so Art-Net binds to the wired interface.
   bringUpWiFi(g_config);
   bringUpEthernet(g_config);
+  artnet.updateNetworkInfo();
 
   artnet.setNodeNames("PixelEtherLED", "PixelEtherLED Controller");
   artnet.begin();                      // responde a ArtPoll → Jinx "Scan"

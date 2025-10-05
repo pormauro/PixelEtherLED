@@ -6,6 +6,12 @@
 
 class ArtNetNode {
 public:
+  enum class InterfacePreference : uint8_t {
+    Ethernet = 0,
+    WiFi     = 1,
+    Auto     = 2,
+  };
+
   using ArtDmxCallback = void (*)(uint16_t universe, uint16_t length, uint8_t sequence,
                                   uint8_t* data, IPAddress remoteIP);
 
@@ -16,6 +22,8 @@ public:
   void setUniverseInfo(uint16_t startUniverse, uint16_t universeCount);
   void setNodeNames(const String& shortName, const String& longName);
   void updateNetworkInfo();
+  void setInterfacePreference(InterfacePreference preference);
+  IPAddress localIp() const { return m_localIp; }
 
 private:
   static constexpr uint16_t ARTNET_PORT = 6454;
@@ -35,5 +43,6 @@ private:
   String m_longName = F("PixelEtherLED Controller");
   std::array<uint8_t, ARTNET_MAX_BUFFER> m_buffer{};
   std::array<uint8_t, 6> m_mac{};
+  InterfacePreference m_interfacePreference = InterfacePreference::Ethernet;
 };
 
