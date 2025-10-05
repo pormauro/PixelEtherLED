@@ -110,31 +110,37 @@ void ArtNetNode::setInterfacePreference(InterfacePreference preference)
 
 void ArtNetNode::refreshLocalInfo()
 {
-  enum class ActiveInterface : uint8_t {
-    None,
-    Ethernet,
-    WiFi,
-  };
+  m_activeInterface = ActiveInterface::None;
 
-  ActiveInterface active = ActiveInterface::None;
+  auto setWifiActive = [&](const IPAddress& ip) {
+    if (ip == IPAddress((uint32_t)0)) {
+      return ip;
+    }
+
+    if ((WiFi.getMode() & WIFI_AP) != 0 && WiFi.softAPIP() == ip) {
+      m_activeInterface = ActiveInterface::WiFiAccessPoint;
+    } else {
+      m_activeInterface = ActiveInterface::WiFiStation;
+    }
+    return ip;
+  };
 
   auto pickEthernet = [&]() {
     IPAddress ip = ETH.localIP();
     if (ip != IPAddress((uint32_t)0)) {
-      active = ActiveInterface::Ethernet;
+      m_activeInterface = ActiveInterface::Ethernet;
     }
     return ip;
   };
 
   auto pickWifi = [&]() {
     IPAddress ip = WiFi.localIP();
-    if (ip == IPAddress((uint32_t)0)) {
-      ip = WiFi.softAPIP();
-    }
     if (ip != IPAddress((uint32_t)0)) {
-      active = ActiveInterface::WiFi;
+      return setWifiActive(ip);
     }
-    return ip;
+
+    ip = WiFi.softAPIP();
+    return setWifiActive(ip);
   };
 
   IPAddress current((uint32_t)0);
@@ -164,12 +170,10 @@ void ArtNetNode::refreshLocalInfo()
   m_localIp = current;
 
   esp_mac_type_t macType = ESP_MAC_ETH;
-  if (active == ActiveInterface::WiFi) {
-    if ((WiFi.getMode() & WIFI_AP) != 0 && WiFi.softAPIP() == current) {
-      macType = ESP_MAC_WIFI_SOFTAP;
-    } else {
-      macType = ESP_MAC_WIFI_STA;
-    }
+  if (m_activeInterface == ActiveInterface::WiFiAccessPoint) {
+    macType = ESP_MAC_WIFI_SOFTAP;
+  } else if (m_activeInterface == ActiveInterface::WiFiStation) {
+    macType = ESP_MAC_WIFI_STA;
   }
 
   if (esp_read_mac(m_mac.data(), macType) != ESP_OK) {
@@ -250,6 +254,40 @@ void ArtNetNode::read()
   if (packetSize <= 0) {
     return;
   }
+
+  IPAddress packetLocal = m_udp.localIP();
+  bool dropPacket = false;
+
+  if (packetLocal != IPAddress((uint32_t)0)) {
+    switch (m_activeInterface) {
+      case ActiveInterface::Ethernet: {
+        IPAddress ethernetIp = ETH.localIP();
+        dropPacket = ethernetIp != IPAddress((uint32_t)0) && packetLocal != ethernetIp;
+        break;
+      }
+      case ActiveInterface::WiFiStation: {
+        IPAddress wifiIp = WiFi.localIP();
+        dropPacket = wifiIp != IPAddress((uint32_t)0) && packetLocal != wifiIp;
+        break;
+      }
+      case ActiveInterface::WiFiAccessPoint: {
+        IPAddress apIp = WiFi.softAPIP();
+        dropPacket = apIp != IPAddress((uint32_t)0) && packetLocal != apIp;
+        break;
+      }
+      case ActiveInterface::None:
+      default:
+        break;
+    }
+  }
+
+  if (dropPacket) {
+    while (m_udp.available()) {
+      m_udp.read();
+    }
+    return;
+  }
+
   if (packetSize > static_cast<int>(m_buffer.size())) {
     packetSize = static_cast<int>(m_buffer.size());
   }
