@@ -811,17 +811,21 @@ String buildConfigPage(const String& message)
   html += F("<div id='wifiStaConfig' class='wifi-group'>");
   html += F("<label for='wifiStaSsid'>SSID</label>");
   html += "<input type='text' id='wifiStaSsid' name='wifiStaSsid' list='wifiNetworks' value='" + wifiStaSsidEsc + "'>";
+  html += F("<input type='hidden' id='wifiStaSsidChanged' name='wifiStaSsidChanged' value='0'>");
   html += F("<datalist id='wifiNetworks'></datalist>");
   html += F("<label for='wifiStaPassword'>Contraseña</label>");
   html += "<input type='password' id='wifiStaPassword' name='wifiStaPassword' value='" + wifiStaPassEsc + "'>";
+  html += F("<input type='hidden' id='wifiStaPasswordChanged' name='wifiStaPasswordChanged' value='0'>");
   html += F("<button type='button' class='secondary' id='wifiScanButton'>Escanear redes Wi-Fi</button>");
   html += F("<div id='wifiScanResults' class='wifi-scan'></div>");
   html += F("</div>");
   html += F("<div id='wifiApConfig' class='wifi-group'>");
   html += F("<label for='wifiApSsid'>SSID del punto de acceso</label>");
   html += "<input type='text' id='wifiApSsid' name='wifiApSsid' value='" + wifiApSsidEsc + "'>";
+  html += F("<input type='hidden' id='wifiApSsidChanged' name='wifiApSsidChanged' value='0'>");
   html += F("<label for='wifiApPassword'>Contraseña (mínimo 8 caracteres, dejar vacío para abierto)</label>");
   html += "<input type='password' id='wifiApPassword' name='wifiApPassword' value='" + wifiApPassEsc + "'>";
+  html += F("<input type='hidden' id='wifiApPasswordChanged' name='wifiApPasswordChanged' value='0'>");
   html += F("<p style='margin:0;font-size:0.85rem;color:#96a2c5;'>Los cambios Wi-Fi se aplican inmediatamente al guardar.</p>");
   html += F("</div>");
 
@@ -898,7 +902,7 @@ String buildConfigPage(const String& message)
   html += F("</div>");
 
   html += F("</section><footer>PixelEtherLED &bull; Panel de control web</footer>");
-  html += F("<script>const wifiEnabledEl=document.getElementById(\"wifiEnabled\");const wifiModeEl=document.getElementById(\"wifiMode\");const wifiStaEl=document.getElementById(\"wifiStaConfig\");const wifiApEl=document.getElementById(\"wifiApConfig\");const scanBtn=document.getElementById(\"wifiScanButton\");const wifiScanResults=document.getElementById(\"wifiScanResults\");const wifiNetworkList=document.getElementById(\"wifiNetworks\");function updateWifiVisibility(){const enabled=wifiEnabledEl.value===\"1\";const mode=wifiModeEl.value;wifiStaEl.style.display=(enabled&&mode===\"sta\")?\"block\":\"none\";wifiApEl.style.display=(enabled&&mode===\"ap\")?\"block\":\"none\";}updateWifiVisibility();wifiEnabledEl.addEventListener(\"change\",updateWifiVisibility);wifiModeEl.addEventListener(\"change\",updateWifiVisibility);function scanWifi(){if(!wifiScanResults)return;wifiScanResults.textContent=\"Buscando redes...\";if(wifiNetworkList){while(wifiNetworkList.firstChild){wifiNetworkList.removeChild(wifiNetworkList.firstChild);}}fetch(\"/wifi_scan\").then(function(res){if(!res.ok){throw new Error(\"http\");}return res.json();}).then(function(data){if(!data||!Array.isArray(data.networks)||data.networks.length===0){wifiScanResults.textContent=\"No se encontraron redes.\";return;}wifiScanResults.textContent=\"\";data.networks.forEach(function(net){var container=document.createElement(\"div\");var title=document.createElement(\"strong\");title.textContent=(net.ssid&&net.ssid.length)?net.ssid:\"(sin SSID)\";container.appendChild(title);container.appendChild(document.createElement(\"br\"));var details=document.createElement(\"span\");details.textContent=\"Señal: \"+net.rssi+\" dBm · \"+net.secure+\" · Canal \"+net.channel;container.appendChild(details);wifiScanResults.appendChild(container);if(wifiNetworkList){var opt=document.createElement(\"option\");opt.value=net.ssid||\"\";wifiNetworkList.appendChild(opt);}});}).catch(function(){wifiScanResults.textContent=\"No se pudo completar el escaneo.\";});}if(scanBtn){scanBtn.addEventListener(\"click\",scanWifi);}</script></body></html>");
+  html += F("<script>const wifiEnabledEl=document.getElementById(\"wifiEnabled\");const wifiModeEl=document.getElementById(\"wifiMode\");const wifiStaEl=document.getElementById(\"wifiStaConfig\");const wifiApEl=document.getElementById(\"wifiApConfig\");const scanBtn=document.getElementById(\"wifiScanButton\");const wifiScanResults=document.getElementById(\"wifiScanResults\");const wifiNetworkList=document.getElementById(\"wifiNetworks\");const wifiStaSsidChanged=document.getElementById(\"wifiStaSsidChanged\");const wifiStaPassChanged=document.getElementById(\"wifiStaPasswordChanged\");const wifiApSsidChanged=document.getElementById(\"wifiApSsidChanged\");const wifiApPassChanged=document.getElementById(\"wifiApPasswordChanged\");function updateWifiVisibility(){const enabled=wifiEnabledEl.value===\"1\";const mode=wifiModeEl.value;wifiStaEl.style.display=(enabled&&mode===\"sta\")?\"block\":\"none\";wifiApEl.style.display=(enabled&&mode===\"ap\")?\"block\":\"none\";}updateWifiVisibility();wifiEnabledEl.addEventListener(\"change\",updateWifiVisibility);wifiModeEl.addEventListener(\"change\",updateWifiVisibility);function markChanged(inputEl, hiddenEl){if(!inputEl||!hiddenEl)return;const setChanged=function(){hiddenEl.value=\"1\";};inputEl.addEventListener(\"input\",setChanged);inputEl.addEventListener(\"change\",setChanged);}markChanged(document.getElementById(\"wifiStaSsid\"),wifiStaSsidChanged);markChanged(document.getElementById(\"wifiStaPassword\"),wifiStaPassChanged);markChanged(document.getElementById(\"wifiApSsid\"),wifiApSsidChanged);markChanged(document.getElementById(\"wifiApPassword\"),wifiApPassChanged);function scanWifi(){if(!wifiScanResults)return;wifiScanResults.textContent=\"Buscando redes...\";if(wifiNetworkList){while(wifiNetworkList.firstChild){wifiNetworkList.removeChild(wifiNetworkList.firstChild);}}fetch(\"/wifi_scan\").then(function(res){if(!res.ok){throw new Error(\"http\");}return res.json();}).then(function(data){if(!data||!Array.isArray(data.networks)||data.networks.length===0){wifiScanResults.textContent=\"No se encontraron redes.\";return;}wifiScanResults.textContent=\"\";data.networks.forEach(function(net){var container=document.createElement(\"div\");var title=document.createElement(\"strong\");title.textContent=(net.ssid&&net.ssid.length)?net.ssid:\"(sin SSID)\";container.appendChild(title);container.appendChild(document.createElement(\"br\"));var details=document.createElement(\"span\");details.textContent=\"Señal: \"+net.rssi+\" dBm · \"+net.secure+\" · Canal \"+net.channel;container.appendChild(details);wifiScanResults.appendChild(container);if(wifiNetworkList){var opt=document.createElement(\"option\");opt.value=net.ssid||\"\";wifiNetworkList.appendChild(opt);}});}).catch(function(){wifiScanResults.textContent=\"No se pudo completar el escaneo.\";});}if(scanBtn){scanBtn.addEventListener(\"click\",scanWifi);}</script></body></html>");
   return html;
 }
 
@@ -940,16 +944,26 @@ void handleConfigPost()
     mode.toLowerCase();
     newConfig.wifiApMode = (mode != "sta");
   }
+  bool wifiStaSsidChanged = g_server.hasArg("wifiStaSsidChanged") && g_server.arg("wifiStaSsidChanged") == "1";
   if (g_server.hasArg("wifiStaSsid")) {
-    newConfig.wifiStaSsid = g_server.arg("wifiStaSsid");
+    String value = g_server.arg("wifiStaSsid");
+    if (wifiStaSsidChanged || value.length()) {
+      newConfig.wifiStaSsid = value;
+    }
   }
-  if (g_server.hasArg("wifiStaPassword")) {
+  bool wifiStaPasswordChanged = g_server.hasArg("wifiStaPasswordChanged") && g_server.arg("wifiStaPasswordChanged") == "1";
+  if (wifiStaPasswordChanged && g_server.hasArg("wifiStaPassword")) {
     newConfig.wifiStaPassword = g_server.arg("wifiStaPassword");
   }
+  bool wifiApSsidChanged = g_server.hasArg("wifiApSsidChanged") && g_server.arg("wifiApSsidChanged") == "1";
   if (g_server.hasArg("wifiApSsid")) {
-    newConfig.wifiApSsid = g_server.arg("wifiApSsid");
+    String value = g_server.arg("wifiApSsid");
+    if (wifiApSsidChanged || value.length()) {
+      newConfig.wifiApSsid = value;
+    }
   }
-  if (g_server.hasArg("wifiApPassword")) {
+  bool wifiApPasswordChanged = g_server.hasArg("wifiApPasswordChanged") && g_server.arg("wifiApPasswordChanged") == "1";
+  if (wifiApPasswordChanged && g_server.hasArg("wifiApPassword")) {
     newConfig.wifiApPassword = g_server.arg("wifiApPassword");
   }
   if (g_server.hasArg("staticIp")) {
