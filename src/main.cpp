@@ -17,7 +17,7 @@ static const IPAddress STATIC_DNS1 (1, 1, 1, 1);
 static const IPAddress STATIC_DNS2 (8, 8, 8, 8);
 
 // ===================== LEDS =====================
-#define DATA_PIN      2
+constexpr uint8_t LED_DATA_PIN        = 2;
 constexpr uint16_t MAX_LEDS             = 1024;
 constexpr uint16_t DEFAULT_NUM_LEDS     = 60;
 constexpr uint16_t DEFAULT_START_UNIVERSE = 0;
@@ -241,13 +241,13 @@ template <template<uint8_t DATA_PIN, fl::EOrder RGB_ORDER> class CHIPSET>
 void addFastLedControllerForOrder(LedColorOrder order)
 {
   switch (order) {
-    case LedColorOrder::RGB: FastLED.addLeds<CHIPSET, DATA_PIN, RGB>(leds, MAX_LEDS); break;
-    case LedColorOrder::RBG: FastLED.addLeds<CHIPSET, DATA_PIN, RBG>(leds, MAX_LEDS); break;
-    case LedColorOrder::GRB: FastLED.addLeds<CHIPSET, DATA_PIN, GRB>(leds, MAX_LEDS); break;
-    case LedColorOrder::GBR: FastLED.addLeds<CHIPSET, DATA_PIN, GBR>(leds, MAX_LEDS); break;
-    case LedColorOrder::BRG: FastLED.addLeds<CHIPSET, DATA_PIN, BRG>(leds, MAX_LEDS); break;
-    case LedColorOrder::BGR: FastLED.addLeds<CHIPSET, DATA_PIN, BGR>(leds, MAX_LEDS); break;
-    default: FastLED.addLeds<CHIPSET, DATA_PIN, BRG>(leds, MAX_LEDS); break;
+    case LedColorOrder::RGB: FastLED.addLeds<CHIPSET, LED_DATA_PIN, RGB>(leds, MAX_LEDS); break;
+    case LedColorOrder::RBG: FastLED.addLeds<CHIPSET, LED_DATA_PIN, RBG>(leds, MAX_LEDS); break;
+    case LedColorOrder::GRB: FastLED.addLeds<CHIPSET, LED_DATA_PIN, GRB>(leds, MAX_LEDS); break;
+    case LedColorOrder::GBR: FastLED.addLeds<CHIPSET, LED_DATA_PIN, GBR>(leds, MAX_LEDS); break;
+    case LedColorOrder::BRG: FastLED.addLeds<CHIPSET, LED_DATA_PIN, BRG>(leds, MAX_LEDS); break;
+    case LedColorOrder::BGR: FastLED.addLeds<CHIPSET, LED_DATA_PIN, BGR>(leds, MAX_LEDS); break;
+    default: FastLED.addLeds<CHIPSET, LED_DATA_PIN, BRG>(leds, MAX_LEDS); break;
   }
 }
 
