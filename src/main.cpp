@@ -10,8 +10,15 @@
 #include <vector>
 
 // ===================== CONFIG RED (IP FIJA - FALLBACK) =====================
-static const IPAddress STATIC_IP   (192, 168, 1, 50);
-static const IPAddress STATIC_GW   (192, 168, 1, 1);
+//
+// Nota: el fallback por DHCP debe estar en la misma subred que la mayoría de los
+// controladores Art-Net residenciales.  Originalmente usábamos 192.168.1.50, pero
+// varias instalaciones domésticas operan en 192.168.0.x, lo que impedía que el
+// host controlador viera las respuestas de ArtPoll cuando el ESP32 tomaba la IP
+// de respaldo.  Con este cambio, en caso de fallo de DHCP el equipo tomará una IP
+// dentro del rango 192.168.0.x y permanecerá visible para los escáneres Art-Net.
+static const IPAddress STATIC_IP   (192, 168, 0, 50);
+static const IPAddress STATIC_GW   (192, 168, 0, 1);
 static const IPAddress STATIC_MASK (255, 255, 255, 0);
 static const IPAddress STATIC_DNS1 (1, 1, 1, 1);
 static const IPAddress STATIC_DNS2 (8, 8, 8, 8);
