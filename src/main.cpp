@@ -10,6 +10,9 @@
 #include <algorithm>
 #include <vector>
 
+#include "AppConfig.h"
+#include "WebUi.h"
+
 // ===================== CONFIG RED (IP FIJA - FALLBACK) =====================
 //
 // Nota: el fallback por DHCP debe estar en la misma subred que la mayoría de los
@@ -40,31 +43,7 @@ const uint32_t DEFAULT_STATIC_MASK       = static_cast<uint32_t>(STATIC_MASK);
 const uint32_t DEFAULT_STATIC_DNS1       = static_cast<uint32_t>(STATIC_DNS1);
 const uint32_t DEFAULT_STATIC_DNS2       = static_cast<uint32_t>(STATIC_DNS2);
 
-// ===================== LEDS =====================
-constexpr uint8_t LED_DATA_PIN        = 2;
-constexpr uint16_t MAX_LEDS             = 1024;
-constexpr uint16_t DEFAULT_NUM_LEDS     = 60;
-constexpr uint16_t DEFAULT_START_UNIVERSE = 0;
-constexpr uint16_t DEFAULT_PIXELS_PER_UNIVERSE = 170;      // 512/3
-constexpr uint8_t  DEFAULT_BRIGHTNESS   = 255;
 constexpr uint32_t DEFAULT_DHCP_TIMEOUT = 3000;             // ms
-
-enum class LedChipType : uint8_t {
-  WS2811 = 0,
-  WS2812B,
-  SK6812,
-  CHIP_TYPE_COUNT
-};
-
-enum class LedColorOrder : uint8_t {
-  RGB = 0,
-  RBG,
-  GRB,
-  GBR,
-  BRG,
-  BGR,
-  COLOR_ORDER_COUNT
-};
 
 constexpr uint8_t DEFAULT_CHIP_TYPE   = static_cast<uint8_t>(LedChipType::WS2811);
 constexpr uint8_t DEFAULT_COLOR_ORDER = static_cast<uint8_t>(LedColorOrder::BRG);
@@ -86,39 +65,11 @@ const char* const COLOR_ORDER_NAMES[] = {
 
 CRGB leds[MAX_LEDS];
 
-struct AppConfig {
-  uint32_t dhcpTimeoutMs;
-  uint16_t numLeds;
-  uint16_t startUniverse;
-  uint16_t pixelsPerUniverse;
-  uint8_t brightness;
-  uint8_t chipType;
-  uint8_t colorOrder;
-  bool     useDhcp;
-  bool     fallbackToStatic;
-  uint32_t staticIp;
-  uint32_t staticGateway;
-  uint32_t staticSubnet;
-  uint32_t staticDns1;
-  uint32_t staticDns2;
-  bool     wifiEnabled;
-  bool     wifiApMode;
-  uint8_t  artnetInput;
-  String   wifiStaSsid;
-  String   wifiStaPassword;
-  String   wifiApSsid;
-  String   wifiApPassword;
-};
-
-AppConfig makeDefaultConfig();
-String ipToString(uint32_t ipValue);
-uint32_t parseIp(const String& text, uint32_t fallback);
 void restoreFactoryDefaults();
 bool checkFactoryResetOnBoot();
 void bringUpEthernet(const AppConfig& config);
 void bringUpWiFi(const AppConfig& config);
 void handleWifiScan();
-String htmlEscape(const String& text);
 String jsonEscape(const String& text);
 String wifiAuthModeToText(wifi_auth_mode_t mode);
 
@@ -168,24 +119,6 @@ uint32_t parseIp(const String& text, uint32_t fallback)
     return static_cast<uint32_t>(ip);
   }
   return fallback;
-}
-
-String htmlEscape(const String& text)
-{
-  String out;
-  out.reserve(text.length());
-  for (size_t i = 0; i < text.length(); ++i) {
-    const char c = text[i];
-    switch (c) {
-      case '&': out += F("&amp;"); break;
-      case '<': out += F("&lt;"); break;
-      case '>': out += F("&gt;"); break;
-      case '"': out += F("&quot;"); break;
-      case 39: out += F("&#39;"); break;
-      default: out += c; break;
-    }
-  }
-  return out;
 }
 
 String jsonEscape(const String& text)
@@ -397,510 +330,28 @@ void saveConfig();
 void handleConfigGet();
 void handleConfigPost();
 void handleRoot();
-String buildConfigPage(const String& message = String());
-void handleFirmwareUpdatePost();
-void handleFirmwareUpload();
-
-void onDmxFrame(uint16_t universe, uint16_t length, uint8_t sequence,
-                uint8_t* data, IPAddress remoteIP)
-{
-  g_dmxFrames++;
-
-  const uint16_t universeStart = g_config.startUniverse;
-  if (universe < universeStart || universe >= (universeStart + g_universeCount)) return;
-
-  const uint16_t idxU = universe - universeStart;
-  const uint16_t pixelOffset = idxU * g_config.pixelsPerUniverse;
-
-  const uint16_t maxPixThisU    = min<uint16_t>(g_config.pixelsPerUniverse, g_config.numLeds - pixelOffset);
-  const uint16_t pixelsInPacket = min<uint16_t>(length / 3, maxPixThisU);
-
-  for (uint16_t i = 0; i < pixelsInPacket; i++) {
-    const uint16_t ledIndex = pixelOffset + i;
-    const uint8_t r = data[i * 3 + 0];
-    const uint8_t g = data[i * 3 + 1];
-    const uint8_t b = data[i * 3 + 2];
-    leds[ledIndex].setRGB(r, g, b);
-  }
-
-  if (idxU < g_universeReceived.size()) {
-    g_universeReceived[idxU] = 1;
-  }
-
-  // ======== PRINT DEBUG (rate-limited) ========
-#if DMX_DEBUG
-  static uint32_t lastPrintMs = 0;
-  if (millis() - lastPrintMs >= DMX_DEBUG_MIN_INTERVAL_MS) {
-    lastPrintMs = millis();
-    String rip = remoteIP.toString();
-    Serial.printf("[DMX] U=%u len=%u seq=%u src=%s frames=%lu\n",
-                  universe, length, sequence, rip.c_str(), (unsigned long)g_dmxFrames);
-
-    // Primeros N canales del paquete recibido (ojo: son del universo actual)
-    uint16_t toShow = min<uint16_t>(DMX_DEBUG_CHANNELS_TO_PRINT, length);
-    Serial.print("  ch[0..]:");
-    for (uint16_t i = 0; i < toShow; i++) {
-      Serial.printf(" %u", data[i]);
-    }
-
-    // Mostrar color del LED de referencia (por defecto, 0 o el primero del universo)
-    uint16_t ledIndexToShow = DMX_DEBUG_LED_INDEX;
-    // Si ese LED NO pertenece a este universo, mostramos el primero de este universo
-    if (ledIndexToShow < pixelOffset || ledIndexToShow >= (pixelOffset + maxPixThisU)) {
-      ledIndexToShow = pixelOffset; // primer LED de este universo
-    }
-    if (ledIndexToShow < g_config.numLeds) {
-      CRGB c = leds[ledIndexToShow];
-      Serial.printf("\n  LED[%u]=(%u,%u,%u)\n", ledIndexToShow, c.r, c.g, c.b);
-    } else {
-      Serial.println();
-    }
-  }
-#endif
-
-  // Actualizar cuando recibimos al menos un paquete de cada universo
-  bool all = true;
-  for (uint16_t i = 0; i < g_universeCount; i++) { if (!g_universeReceived[i]) { all = false; break; } }
-  if (all) {
-    FastLED.show();
-    std::fill(g_universeReceived.begin(), g_universeReceived.end(), 0);
-  }
-}
-
-template <typename T>
-T clampValue(T value, T minValue, T maxValue)
-{
-  return std::max(minValue, std::min(value, maxValue));
-}
-
-uint8_t clampIndex(uint8_t value, uint8_t maxValue, uint8_t fallback)
-{
-  if (value >= maxValue) return fallback;
-  return value;
-}
-
-void normalizeConfig(AppConfig& config)
-{
-  config.numLeds = clampValue<uint16_t>(config.numLeds, 1, MAX_LEDS);
-  config.pixelsPerUniverse = clampValue<uint16_t>(config.pixelsPerUniverse, 1, MAX_LEDS);
-  config.brightness = clampValue<uint8_t>(config.brightness, 1, 255);
-  if (config.dhcpTimeoutMs < 500) {
-    config.dhcpTimeoutMs = 500; // mínimo razonable
-  }
-  config.chipType   = clampIndex(config.chipType, static_cast<uint8_t>(LedChipType::CHIP_TYPE_COUNT), DEFAULT_CHIP_TYPE);
-  config.colorOrder = clampIndex(config.colorOrder, static_cast<uint8_t>(LedColorOrder::COLOR_ORDER_COUNT), DEFAULT_COLOR_ORDER);
-  config.useDhcp = config.useDhcp ? true : false;
-  config.fallbackToStatic = config.fallbackToStatic ? true : false;
-  config.wifiEnabled = config.wifiEnabled ? true : false;
-  config.wifiApMode  = config.wifiApMode ? true : false;
-  config.artnetInput = clampValue<uint8_t>(config.artnetInput, 0,
-                                           static_cast<uint8_t>(ArtNetNode::InterfacePreference::Auto));
-
-  config.wifiStaSsid.trim();
-  config.wifiStaPassword.trim();
-  config.wifiApSsid.trim();
-  config.wifiApPassword.trim();
-
-  if (config.wifiStaSsid.length() > 32) {
-    config.wifiStaSsid = config.wifiStaSsid.substring(0, 32);
-  }
-  if (config.wifiStaPassword.length() > 64) {
-    config.wifiStaPassword = config.wifiStaPassword.substring(0, 64);
-  }
-  if (config.wifiApSsid.length() == 0) {
-    config.wifiApSsid = DEFAULT_WIFI_AP_SSID;
-  } else if (config.wifiApSsid.length() > 32) {
-    config.wifiApSsid = config.wifiApSsid.substring(0, 32);
-  }
-  if (config.wifiApPassword.length() > 0 && config.wifiApPassword.length() < 8) {
-    config.wifiApPassword.clear();
-  }
-  if (config.wifiApPassword.length() > 64) {
-    config.wifiApPassword = config.wifiApPassword.substring(0, 64);
-  }
-
-  if (config.staticSubnet == 0) {
-    config.staticSubnet = DEFAULT_STATIC_MASK;
-  }
-  if (config.staticIp == 0) {
-    config.staticIp = DEFAULT_STATIC_IP;
-  }
-  if (config.staticGateway == 0) {
-    config.staticGateway = DEFAULT_STATIC_GW;
-  }
-  if (config.staticDns1 == 0) {
-    config.staticDns1 = config.staticGateway != 0 ? config.staticGateway : DEFAULT_STATIC_DNS1;
-  }
-  if (config.staticDns2 == 0) {
-    config.staticDns2 = DEFAULT_STATIC_DNS2;
-  }
-}
-
-template <template<uint8_t DATA_PIN, fl::EOrder RGB_ORDER> class CHIPSET>
-void addFastLedControllerForOrder(LedColorOrder order)
-{
-  switch (order) {
-    case LedColorOrder::RGB: FastLED.addLeds<CHIPSET, LED_DATA_PIN, RGB>(leds, MAX_LEDS); break;
-    case LedColorOrder::RBG: FastLED.addLeds<CHIPSET, LED_DATA_PIN, RBG>(leds, MAX_LEDS); break;
-    case LedColorOrder::GRB: FastLED.addLeds<CHIPSET, LED_DATA_PIN, GRB>(leds, MAX_LEDS); break;
-    case LedColorOrder::GBR: FastLED.addLeds<CHIPSET, LED_DATA_PIN, GBR>(leds, MAX_LEDS); break;
-    case LedColorOrder::BRG: FastLED.addLeds<CHIPSET, LED_DATA_PIN, BRG>(leds, MAX_LEDS); break;
-    case LedColorOrder::BGR: FastLED.addLeds<CHIPSET, LED_DATA_PIN, BGR>(leds, MAX_LEDS); break;
-    default: FastLED.addLeds<CHIPSET, LED_DATA_PIN, BRG>(leds, MAX_LEDS); break;
-  }
-}
-
-void initializeFastLEDController()
-{
-  static bool initialized = false;
-  if (initialized) return;
-
-  LedChipType chip = static_cast<LedChipType>(clampIndex(g_config.chipType, static_cast<uint8_t>(LedChipType::CHIP_TYPE_COUNT), DEFAULT_CHIP_TYPE));
-  LedColorOrder order = static_cast<LedColorOrder>(clampIndex(g_config.colorOrder, static_cast<uint8_t>(LedColorOrder::COLOR_ORDER_COUNT), DEFAULT_COLOR_ORDER));
-
-  switch (chip) {
-    case LedChipType::WS2811:
-      addFastLedControllerForOrder<WS2811>(order);
-      break;
-    case LedChipType::WS2812B:
-      addFastLedControllerForOrder<WS2812B>(order);
-      break;
-    case LedChipType::SK6812:
-      addFastLedControllerForOrder<SK6812>(order);
-      break;
-    default:
-      addFastLedControllerForOrder<WS2811>(order);
-      break;
-  }
-
-  initialized = true;
-}
-
-const char* getChipName(uint8_t value)
-{
-  uint8_t idx = clampIndex(value, static_cast<uint8_t>(LedChipType::CHIP_TYPE_COUNT), DEFAULT_CHIP_TYPE);
-  return CHIP_TYPE_NAMES[idx];
-}
-
-const char* getColorOrderName(uint8_t value)
-{
-  uint8_t idx = clampIndex(value, static_cast<uint8_t>(LedColorOrder::COLOR_ORDER_COUNT), DEFAULT_COLOR_ORDER);
-  return COLOR_ORDER_NAMES[idx];
-}
-
-void loadConfig()
-{
-  g_config = makeDefaultConfig();
-
-  if (g_prefs.begin("pixelcfg", true)) {
-    g_config.dhcpTimeoutMs   = g_prefs.getUInt("dhcpTimeout", g_config.dhcpTimeoutMs);
-    g_config.numLeds         = g_prefs.getUShort("numLeds", g_config.numLeds);
-    g_config.startUniverse   = g_prefs.getUShort("startUni", g_config.startUniverse);
-    g_config.pixelsPerUniverse = g_prefs.getUShort("pixPerUni", g_config.pixelsPerUniverse);
-    g_config.brightness      = g_prefs.getUChar("brightness", g_config.brightness);
-    g_config.chipType        = g_prefs.getUChar("chipType", g_config.chipType);
-    g_config.colorOrder      = g_prefs.getUChar("colorOrder", g_config.colorOrder);
-    g_config.useDhcp         = g_prefs.getBool("useDhcp", g_config.useDhcp);
-    g_config.fallbackToStatic = g_prefs.getBool("dhcpFallback", g_config.fallbackToStatic);
-    g_config.staticIp        = g_prefs.getUInt("staticIp", g_config.staticIp);
-    g_config.staticGateway   = g_prefs.getUInt("staticGw", g_config.staticGateway);
-    g_config.staticSubnet    = g_prefs.getUInt("staticMask", g_config.staticSubnet);
-    g_config.staticDns1      = g_prefs.getUInt("staticDns1", g_config.staticDns1);
-    g_config.staticDns2      = g_prefs.getUInt("staticDns2", g_config.staticDns2);
-    g_config.wifiEnabled     = g_prefs.getBool("wifiEnabled", g_config.wifiEnabled);
-    g_config.wifiApMode      = g_prefs.getBool("wifiApMode", g_config.wifiApMode);
-    g_config.artnetInput     = g_prefs.getUChar("artnetInput", g_config.artnetInput);
-    g_config.wifiStaSsid     = g_prefs.getString("wifiStaSsid", g_config.wifiStaSsid);
-    g_config.wifiStaPassword = g_prefs.getString("wifiStaPass", g_config.wifiStaPassword);
-    g_config.wifiApSsid      = g_prefs.getString("wifiApSsid", g_config.wifiApSsid);
-    g_config.wifiApPassword  = g_prefs.getString("wifiApPass", g_config.wifiApPassword);
-    g_prefs.end();
-  }
-
-  normalizeConfig(g_config);
-}
-
-void saveConfig()
-{
-  if (g_prefs.begin("pixelcfg", false)) {
-    g_prefs.putUInt("dhcpTimeout", g_config.dhcpTimeoutMs);
-    g_prefs.putUShort("numLeds", g_config.numLeds);
-    g_prefs.putUShort("startUni", g_config.startUniverse);
-    g_prefs.putUShort("pixPerUni", g_config.pixelsPerUniverse);
-    g_prefs.putUChar("brightness", g_config.brightness);
-    g_prefs.putUChar("chipType", g_config.chipType);
-    g_prefs.putUChar("colorOrder", g_config.colorOrder);
-    g_prefs.putBool("useDhcp", g_config.useDhcp);
-    g_prefs.putBool("dhcpFallback", g_config.fallbackToStatic);
-    g_prefs.putUInt("staticIp", g_config.staticIp);
-    g_prefs.putUInt("staticGw", g_config.staticGateway);
-    g_prefs.putUInt("staticMask", g_config.staticSubnet);
-    g_prefs.putUInt("staticDns1", g_config.staticDns1);
-    g_prefs.putUInt("staticDns2", g_config.staticDns2);
-    g_prefs.putBool("wifiEnabled", g_config.wifiEnabled);
-    g_prefs.putBool("wifiApMode", g_config.wifiApMode);
-    g_prefs.putUChar("artnetInput", g_config.artnetInput);
-    g_prefs.putString("wifiStaSsid", g_config.wifiStaSsid);
-    g_prefs.putString("wifiStaPass", g_config.wifiStaPassword);
-    g_prefs.putString("wifiApSsid", g_config.wifiApSsid);
-    g_prefs.putString("wifiApPass", g_config.wifiApPassword);
-    g_prefs.end();
-  }
-}
-
-void applyConfig()
-{
-  normalizeConfig(g_config);
-  g_universeCount = (g_config.numLeds + g_config.pixelsPerUniverse - 1) / g_config.pixelsPerUniverse;
-  g_universeCount = std::max<uint16_t>(1, g_universeCount);
-  g_universeReceived.assign(g_universeCount, 0);
-
-  artnet.setUniverseInfo(g_config.startUniverse, g_universeCount);
-
-  ArtNetNode::InterfacePreference pref = ArtNetNode::InterfacePreference::Ethernet;
-  if (g_config.artnetInput == static_cast<uint8_t>(ArtNetNode::InterfacePreference::WiFi)) {
-    pref = ArtNetNode::InterfacePreference::WiFi;
-  } else if (g_config.artnetInput == static_cast<uint8_t>(ArtNetNode::InterfacePreference::Auto)) {
-    pref = ArtNetNode::InterfacePreference::Auto;
-  }
-  artnet.setInterfacePreference(pref);
-
-  FastLED.setBrightness(g_config.brightness);
-  FastLED.clear(true);
-}
-
 String buildConfigPage(const String& message)
 {
-  String html;
-  html.reserve(8192);
-  artnet.updateNetworkInfo();
+  WebUiRuntime runtime{};
+  runtime.ethLinkUp = eth_link_up;
+  runtime.ethHasIp = eth_has_ip;
+  runtime.ethLocalIp = ETH.localIP();
+  runtime.wifiStaConnected = wifi_sta_connected;
+  runtime.wifiStaHasIp = wifi_sta_has_ip;
+  runtime.wifiStaIp = wifi_sta_ip;
+  runtime.wifiApIp = wifi_ap_ip;
+  runtime.wifiApRunning = wifi_ap_running;
+  runtime.wifiStaSsidCurrent = wifi_sta_ssid_current;
+  runtime.wifiClientCount = (g_config.wifiEnabled && g_config.wifiApMode) ? static_cast<uint8_t>(WiFi.softAPgetStationNum()) : 0;
+  runtime.wifiLocalIp = WiFi.localIP();
+  runtime.wifiSoftApIp = WiFi.softAPIP();
+  runtime.artnetIp = artnet.localIp();
+  runtime.universeCount = g_universeCount;
+  runtime.dmxFrames = g_dmxFrames;
 
-  const bool usingDhcp = g_config.useDhcp;
-  const String fallbackLabel = g_config.fallbackToStatic ? "Aplicar IP fija configurada" : "Mantener sin IP";
-  const String staticIpStr   = ipToString(g_config.staticIp);
-  const String staticGwStr   = ipToString(g_config.staticGateway);
-  const String staticMaskStr = ipToString(g_config.staticSubnet);
-  const String staticDns1Str = ipToString(g_config.staticDns1);
-  const String staticDns2Str = ipToString(g_config.staticDns2);
-  const bool   wifiEnabled   = g_config.wifiEnabled;
-  const bool   wifiApMode    = g_config.wifiApMode;
-  const uint8_t artnetInputValue = g_config.artnetInput;
-  const String wifiStaSsidEsc = htmlEscape(g_config.wifiStaSsid);
-  const String wifiStaPassEsc = htmlEscape(g_config.wifiStaPassword);
-  const String wifiApSsidEsc  = htmlEscape(g_config.wifiApSsid);
-  const String wifiApPassEsc  = htmlEscape(g_config.wifiApPassword);
-  IPAddress artnetIp = artnet.localIp();
-  String artnetIpStr = artnetIp != IPAddress((uint32_t)0) ? artnetIp.toString() : String("-");
-  String artnetInputLabel;
-  switch (artnetInputValue) {
-    case static_cast<uint8_t>(ArtNetNode::InterfacePreference::WiFi):
-      artnetInputLabel = F("Wi-Fi");
-      break;
-    case static_cast<uint8_t>(ArtNetNode::InterfacePreference::Auto):
-      artnetInputLabel = F("Automático");
-      break;
-    case static_cast<uint8_t>(ArtNetNode::InterfacePreference::Ethernet):
-    default:
-      artnetInputLabel = F("Ethernet");
-      break;
-  }
-  IPAddress wifiCurrentIp = wifi_sta_has_ip ? wifi_sta_ip : (wifi_ap_running ? wifi_ap_ip : IPAddress((uint32_t)0));
-  String wifiIpStr = wifiCurrentIp != IPAddress((uint32_t)0) ? wifiCurrentIp.toString() : String("-");
-  String wifiStatusText;
-  if (!wifiEnabled) {
-    wifiStatusText = F("Deshabilitado");
-  } else if (wifiApMode) {
-    wifiStatusText = wifi_ap_running ? F("AP activo") : F("Inicializando AP");
-  } else {
-    if (wifi_sta_connected) {
-      wifiStatusText = wifi_sta_has_ip ? F("Conectado") : F("Sin IP (conectando)");
-    } else {
-      wifiStatusText = F("Buscando red…");
-    }
-  }
-  String wifiModeLabel = wifiApMode ? F("Punto de acceso") : F("Cliente");
-  String wifiSsidLabel = wifiApMode ? g_config.wifiApSsid : (wifi_sta_ssid_current.length() ? wifi_sta_ssid_current : g_config.wifiStaSsid);
-  wifiSsidLabel.trim();
-  if (wifiSsidLabel.length() == 0) {
-    wifiSsidLabel = F("(no configurado)");
-  }
-  String wifiSsidStatus = htmlEscape(wifiSsidLabel);
-  String wifiClientsStr = (wifiEnabled && wifiApMode) ? String(WiFi.softAPgetStationNum()) : String("-");
-  String artnetActiveLabel = F("Sin enlace");
-  if (artnetIp != IPAddress((uint32_t)0)) {
-    if (artnetIp == ETH.localIP()) {
-      artnetActiveLabel = F("Ethernet");
-    } else {
-      IPAddress staIp = WiFi.localIP();
-      IPAddress apIp = WiFi.softAPIP();
-      if (artnetIp == staIp || artnetIp == apIp || artnetIp == wifi_sta_ip || artnetIp == wifi_ap_ip) {
-        artnetActiveLabel = F("Wi-Fi");
-      } else {
-        artnetActiveLabel = F("Desconocido");
-      }
-    }
-  }
-
-  html += F("<!DOCTYPE html><html lang='es'><head><meta charset='utf-8'>");
-  html += F("<meta name='viewport' content='width=device-width,initial-scale=1'>");
-  html += F("<title>PixelEtherLED - Configuración</title>");
-  html += F("<style>body{font-family:Segoe UI,Helvetica,Arial,sans-serif;background:#0c0f1a;color:#f0f0f0;margin:0;padding:0;}\n");
-  html += F("header{background:#121a2a;padding:1.5rem;text-align:center;}\n");
-  html += F("h1{margin:0;font-size:1.8rem;}\nsection{padding:1.5rem;}\nform{max-width:720px;margin:0 auto;background:#141d30;padding:1.5rem;border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,0.45);}\n");
-  html += F("label{display:block;margin-bottom:0.35rem;font-weight:600;}\ninput[type=number],input[type=text],input[type=password],select{width:100%;padding:0.65rem;border-radius:8px;border:1px solid #23314d;background:#0c1424;color:#f0f0f0;margin-bottom:1rem;}\n");
-  html += F("button{width:100%;padding:0.85rem;background:#3478f6;color:#fff;border:none;border-radius:8px;font-size:1rem;font-weight:600;cursor:pointer;}\nbutton:hover{background:#255fcb;}\n");
-  html += F("button.secondary{width:auto;display:inline-block;margin:0.25rem 0 0.75rem;background:#1f2b44;}\nbutton.secondary:hover{background:#263355;}\n");
-  html += F(".card{max-width:720px;margin:1.5rem auto;background:#141d30;padding:1.5rem;border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,0.45);}\n");
-  html += F(".grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:1rem;}\nfooter{text-align:center;padding:1rem;color:#96a2c5;font-size:0.85rem;}\n");
-  html += F(".message{margin-bottom:1rem;padding:0.75rem 1rem;border-radius:8px;background:#1f2b44;color:#a3ffb0;}\n");
-  html += F(".section-title{margin-top:1.5rem;font-size:1.05rem;color:#9bb3ff;text-transform:uppercase;letter-spacing:0.05em;}\n");
-  html += F(".wifi-group{margin-bottom:1rem;padding:1rem;background:#101829;border-radius:10px;border:1px solid #23314d;}\n");
-  html += F(".wifi-scan{margin-top:0.5rem;font-size:0.9rem;color:#cfd8f7;}\n.wifi-scan div{padding:0.35rem 0;border-bottom:1px solid #23314d;}\n.wifi-scan div:last-child{border-bottom:none;}\n.wifi-scan strong{display:block;margin-bottom:0.1rem;}\n");
-  html += F("input[type=file]{width:100%;margin-bottom:1rem;}\n</style></head><body>");
-  html += F("<header><h1>PixelEtherLED</h1><p>Panel de configuración avanzada</p></header>");
-  html += F("<section>");
-  if (message.length()) {
-    html += F("<div class='message'>");
-    html += message;
-    html += F("</div>");
-  }
-  html += F("<form method='post' action='/config'>");
-  html += F("<h2 class='section-title'>Ethernet</h2>");
-  html += F("<label for='dhcpTimeout'>Tiempo de espera DHCP (ms)</label>");
-  html += "<input type='number' id='dhcpTimeout' name='dhcpTimeout' min='500' max='60000' value='" + String(g_config.dhcpTimeoutMs) + "'>";
-  html += F("<label for='networkMode'>Modo de red</label>");
-  html += F("<select id='networkMode' name='networkMode'>");
-  html += String("<option value='dhcp'") + (usingDhcp ? " selected" : "") + ">DHCP (automático)</option>";
-  html += String("<option value='static'") + (!usingDhcp ? " selected" : "") + ">IP fija</option>";
-  html += F("</select>");
-  html += F("<label for='fallbackToStatic'>Si DHCP falla</label>");
-  html += F("<select id='fallbackToStatic' name='fallbackToStatic'>");
-  html += String("<option value='1'") + (g_config.fallbackToStatic ? " selected" : "") + ">Aplicar IP fija configurada</option>";
-  html += String("<option value='0'") + (!g_config.fallbackToStatic ? " selected" : "") + ">Mantener sin IP</option>";
-  html += F("</select>");
-  html += F("<label for='staticIp'>IP fija</label>");
-  html += "<input type='text' id='staticIp' name='staticIp' value='" + staticIpStr + "'>";
-  html += F("<label for='staticGateway'>Puerta de enlace</label>");
-  html += "<input type='text' id='staticGateway' name='staticGateway' value='" + staticGwStr + "'>";
-  html += F("<label for='staticMask'>Máscara de subred</label>");
-  html += "<input type='text' id='staticMask' name='staticMask' value='" + staticMaskStr + "'>";
-  html += F("<label for='staticDns1'>DNS primario</label>");
-  html += "<input type='text' id='staticDns1' name='staticDns1' value='" + staticDns1Str + "'>";
-  html += F("<label for='staticDns2'>DNS secundario</label>");
-  html += "<input type='text' id='staticDns2' name='staticDns2' value='" + staticDns2Str + "'>";
-
-  html += F("<h2 class='section-title'>Art-Net</h2>");
-  html += F("<label for='artnetInput'>Interfaz preferida</label>");
-  html += F("<select id='artnetInput' name='artnetInput'>");
-  html += String("<option value='0'") + (artnetInputValue == 0 ? " selected" : "") + ">Ethernet</option>";
-  html += String("<option value='1'") + (artnetInputValue == 1 ? " selected" : "") + ">Wi-Fi</option>";
-  html += F("</select>");
-  html += F("<p style='margin:-0.5rem 0 1rem;font-size:0.85rem;color:#96a2c5;'>Determiná desde qué interfaz se reciben los datos Art-Net. Si la opción seleccionada no tiene IP, se usará la otra disponible.</p>");
-
-  html += F("<h2 class='section-title'>Wi-Fi</h2>");
-  html += F("<label for='wifiEnabled'>Wi-Fi</label>");
-  html += F("<select id='wifiEnabled' name='wifiEnabled'>");
-  html += String("<option value='1'") + (wifiEnabled ? " selected" : "") + ">Habilitado</option>";
-  html += String("<option value='0'") + (!wifiEnabled ? " selected" : "") + ">Deshabilitado</option>";
-  html += F("</select>");
-  html += F("<label for='wifiMode'>Modo Wi-Fi</label>");
-  html += F("<select id='wifiMode' name='wifiMode'>");
-  html += String("<option value='ap'") + (wifiApMode ? " selected" : "") + ">Punto de acceso</option>";
-  html += String("<option value='sta'") + (!wifiApMode ? " selected" : "") + ">Cliente (unirse a red)</option>";
-  html += F("</select>");
-  html += F("<div id='wifiStaConfig' class='wifi-group'>");
-  html += F("<label for='wifiStaSsid'>SSID</label>");
-  html += "<input type='text' id='wifiStaSsid' name='wifiStaSsid' list='wifiNetworks' value='" + wifiStaSsidEsc + "'>";
-  html += F("<datalist id='wifiNetworks'></datalist>");
-  html += F("<label for='wifiStaPassword'>Contraseña</label>");
-  html += "<input type='password' id='wifiStaPassword' name='wifiStaPassword' value='" + wifiStaPassEsc + "'>";
-  html += F("<button type='button' class='secondary' id='wifiScanButton'>Escanear redes Wi-Fi</button>");
-  html += F("<div id='wifiScanResults' class='wifi-scan'></div>");
-  html += F("</div>");
-  html += F("<div id='wifiApConfig' class='wifi-group'>");
-  html += F("<label for='wifiApSsid'>SSID del punto de acceso</label>");
-  html += "<input type='text' id='wifiApSsid' name='wifiApSsid' value='" + wifiApSsidEsc + "'>";
-  html += F("<label for='wifiApPassword'>Contraseña (mínimo 8 caracteres, dejar vacío para abierto)</label>");
-  html += "<input type='password' id='wifiApPassword' name='wifiApPassword' value='" + wifiApPassEsc + "'>";
-  html += F("<p style='margin:0;font-size:0.85rem;color:#96a2c5;'>Los cambios Wi-Fi se aplican inmediatamente al guardar.</p>");
-  html += F("</div>");
-
-  html += F("<h2 class='section-title'>LEDs</h2>");
-  html += F("<label for='numLeds'>Cantidad de LEDs activos</label>");
-  html += "<input type='number' id='numLeds' name='numLeds' min='1' max='" + String(MAX_LEDS) + "' value='" + String(g_config.numLeds) + "'>";
-  html += F("<label for='startUniverse'>Universo Art-Net inicial</label>");
-  html += "<input type='number' id='startUniverse' name='startUniverse' min='0' max='32767' value='" + String(g_config.startUniverse) + "'>";
-  html += F("<label for='pixelsPerUniverse'>Pixeles por universo</label>");
-  html += "<input type='number' id='pixelsPerUniverse' name='pixelsPerUniverse' min='1' max='512' value='" + String(g_config.pixelsPerUniverse) + "'>";
-  html += F("<label for='brightness'>Brillo máximo (0-255)</label>");
-  html += "<input type='number' id='brightness' name='brightness' min='1' max='255' value='" + String(g_config.brightness) + "'>";
-  html += F("<label for='chipType'>Tipo de chip LED</label>");
-  html += F("<select id='chipType' name='chipType'>");
-  for (uint8_t i = 0; i < static_cast<uint8_t>(LedChipType::CHIP_TYPE_COUNT); ++i) {
-    html += "<option value='" + String(i) + "'";
-    if (g_config.chipType == i) html += " selected";
-    html += ">";
-    html += CHIP_TYPE_NAMES[i];
-    html += F("</option>");
-  }
-  html += F("</select>");
-  html += F("<label for='colorOrder'>Orden de color</label>");
-  html += F("<select id='colorOrder' name='colorOrder'>");
-  for (uint8_t i = 0; i < static_cast<uint8_t>(LedColorOrder::COLOR_ORDER_COUNT); ++i) {
-    html += "<option value='" + String(i) + "'";
-    if (g_config.colorOrder == i) html += " selected";
-    html += ">";
-    html += COLOR_ORDER_NAMES[i];
-    html += F("</option>");
-  }
-  html += F("</select>");
-  html += F("<button type='submit'>Guardar configuración</button>");
-  html += F("</form>");
-
-  html += F("<div class='card'>");
-  html += F("<h2>Estado del sistema</h2><div class='grid'>");
-  html += "<div><strong>IP Ethernet:</strong><br>" + ETH.localIP().toString() + "</div>";
-  html += "<div><strong>Link Ethernet:</strong><br>" + String(eth_link_up ? "activo" : "desconectado") + "</div>";
-  html += "<div><strong>Modo de red:</strong><br>" + String(usingDhcp ? "DHCP" : "IP fija") + "</div>";
-  html += "<div><strong>Fallback DHCP:</strong><br>" + fallbackLabel + "</div>";
-  html += "<div><strong>Fuente Art-Net:</strong><br>" + artnetInputLabel + "</div>";
-  html += "<div><strong>Interfaz activa Art-Net:</strong><br>" + artnetActiveLabel + "</div>";
-  html += "<div><strong>IP Art-Net:</strong><br>" + artnetIpStr + "</div>";
-  html += "<div><strong>IP fija configurada:</strong><br>" + staticIpStr + "</div>";
-  html += "<div><strong>Gateway:</strong><br>" + staticGwStr + "</div>";
-  html += "<div><strong>Máscara:</strong><br>" + staticMaskStr + "</div>";
-  html += "<div><strong>DNS:</strong><br>" + staticDns1Str + " / " + staticDns2Str + "</div>";
-  html += "<div><strong>Wi-Fi:</strong><br>" + wifiStatusText + "</div>";
-  html += "<div><strong>Modo Wi-Fi:</strong><br>" + wifiModeLabel + "</div>";
-  html += "<div><strong>SSID:</strong><br>" + wifiSsidStatus + "</div>";
-  html += "<div><strong>IP Wi-Fi:</strong><br>" + wifiIpStr + "</div>";
-  html += "<div><strong>Clientes Wi-Fi:</strong><br>" + wifiClientsStr + "</div>";
-  html += "<div><strong>Universos:</strong><br>" + String(g_universeCount) + " (desde " + String(g_config.startUniverse) + ")";
-  html += "</div><div><strong>Frames DMX:</strong><br>" + String((unsigned long)g_dmxFrames) + "</div>";
-  html += "<div><strong>Brillo:</strong><br>" + String(g_config.brightness) + "/255";
-  html += "</div><div><strong>DHCP timeout:</strong><br>" + String(g_config.dhcpTimeoutMs) + " ms";
-  html += "</div><div><strong>Chip LED:</strong><br>" + String(getChipName(g_config.chipType)) + "</div>";
-  html += "<div><strong>Orden:</strong><br>" + String(getColorOrderName(g_config.colorOrder)) + "</div>";
-  html += F("</div></div>");
-
-  html += F("<div class='card'>");
-  html += F("<h2>Consejos</h2><ul><li>Si ampliás la tira LED, incrementá el parámetro <em>Cantidad de LEDs activos</em>.</li><li>Reducí el brillo máximo para ahorrar consumo o evitar saturación.</li><li>Ajustá el tiempo de espera de DHCP si tu red tarda más en asignar IP.</li><li>El valor de pixeles por universo determina cuántos LEDs se controlan por paquete Art-Net.</li><li>Mantené presionado el botón de reinicio durante 10 segundos al encender para restaurar la configuración de fábrica.</li></ul>");
-  html += F("</div>");
-
-  html += F("<div class='card'>");
-  html += F("<h2>Actualizar firmware</h2>");
-  html += F("<form method='post' action='/update' enctype='multipart/form-data'>");
-  html += F("<label for='firmware'>Seleccioná el archivo de firmware (.bin)</label>");
-  html += F("<input type='file' id='firmware' name='firmware' accept='.bin,application/octet-stream'>");
-  html += F("<button type='submit'>Subir y aplicar firmware</button>");
-  html += F("</form>");
-  html += F("<p style='margin-top:0.75rem;font-size:0.9rem;color:#96a2c5;'>El dispositivo se reiniciará automáticamente luego de una actualización exitosa.</p>");
-  html += F("</div>");
-
-  html += F("</section><footer>PixelEtherLED &bull; Panel de control web</footer>");
-  html += F("<script>const wifiEnabledEl=document.getElementById(\"wifiEnabled\");const wifiModeEl=document.getElementById(\"wifiMode\");const wifiStaEl=document.getElementById(\"wifiStaConfig\");const wifiApEl=document.getElementById(\"wifiApConfig\");const scanBtn=document.getElementById(\"wifiScanButton\");const wifiScanResults=document.getElementById(\"wifiScanResults\");const wifiNetworkList=document.getElementById(\"wifiNetworks\");function updateWifiVisibility(){const enabled=wifiEnabledEl.value===\"1\";const mode=wifiModeEl.value;wifiStaEl.style.display=(enabled&&mode===\"sta\")?\"block\":\"none\";wifiApEl.style.display=(enabled&&mode===\"ap\")?\"block\":\"none\";}updateWifiVisibility();wifiEnabledEl.addEventListener(\"change\",updateWifiVisibility);wifiModeEl.addEventListener(\"change\",updateWifiVisibility);function scanWifi(){if(!wifiScanResults)return;wifiScanResults.textContent=\"Buscando redes...\";if(wifiNetworkList){while(wifiNetworkList.firstChild){wifiNetworkList.removeChild(wifiNetworkList.firstChild);}}fetch(\"/wifi_scan\").then(function(res){if(!res.ok){throw new Error(\"http\");}return res.json();}).then(function(data){if(!data||!Array.isArray(data.networks)||data.networks.length===0){wifiScanResults.textContent=\"No se encontraron redes.\";return;}wifiScanResults.textContent=\"\";data.networks.forEach(function(net){var container=document.createElement(\"div\");var title=document.createElement(\"strong\");title.textContent=(net.ssid&&net.ssid.length)?net.ssid:\"(sin SSID)\";container.appendChild(title);container.appendChild(document.createElement(\"br\"));var details=document.createElement(\"span\");details.textContent=\"Señal: \"+net.rssi+\" dBm · \"+net.secure+\" · Canal \"+net.channel;container.appendChild(details);wifiScanResults.appendChild(container);if(wifiNetworkList){var opt=document.createElement(\"option\");opt.value=net.ssid||\"\";wifiNetworkList.appendChild(opt);}});}).catch(function(){wifiScanResults.textContent=\"No se pudo completar el escaneo.\";});}if(scanBtn){scanBtn.addEventListener(\"click\",scanWifi);}</script></body></html>");
-  return html;
+  return renderConfigPage(g_config, runtime, message);
 }
+
 
 void handleConfigGet()
 {
