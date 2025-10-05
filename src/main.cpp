@@ -855,10 +855,15 @@ void handleFirmwareUpdatePost()
 
 void bringUpWiFi(const AppConfig& config)
 {
+  // Ensure the Wi-Fi driver and the TCP/IP stack are initialised before
+  // invoking any Wi-Fi API.  Calling functions such as scanDelete() or
+  // softAPdisconnect() while the driver is still stopped can trigger an
+  // assertion inside LwIP ("Invalid mbox").
+  WiFi.mode(WIFI_OFF);
+
   WiFi.scanDelete();
   WiFi.softAPdisconnect(true);
   WiFi.disconnect(true, true);
-  WiFi.mode(WIFI_OFF);
   delay(50);
 
   wifi_sta_running = false;
