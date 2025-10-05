@@ -121,6 +121,44 @@ uint32_t parseIp(const String& text, uint32_t fallback)
   return fallback;
 }
 
+void normalizeConfig(AppConfig& config)
+{
+  config.dhcpTimeoutMs = std::max<uint32_t>(500, std::min<uint32_t>(config.dhcpTimeoutMs, 60000));
+  config.numLeds = std::max<uint16_t>(1, std::min<uint16_t>(config.numLeds, MAX_LEDS));
+  config.startUniverse = std::min<uint16_t>(config.startUniverse, static_cast<uint16_t>(32767));
+  config.pixelsPerUniverse = std::max<uint16_t>(1, std::min<uint16_t>(config.pixelsPerUniverse, MAX_LEDS));
+  config.brightness = std::max<uint8_t>(1, std::min<uint8_t>(config.brightness, static_cast<uint8_t>(255)));
+
+  if (config.chipType >= static_cast<uint8_t>(LedChipType::CHIP_TYPE_COUNT)) {
+    config.chipType = DEFAULT_CHIP_TYPE;
+  }
+  if (config.colorOrder >= static_cast<uint8_t>(LedColorOrder::COLOR_ORDER_COUNT)) {
+    config.colorOrder = DEFAULT_COLOR_ORDER;
+  }
+
+  config.staticIp = config.staticIp ? config.staticIp : DEFAULT_STATIC_IP;
+  config.staticGateway = config.staticGateway ? config.staticGateway : DEFAULT_STATIC_GW;
+  config.staticSubnet = config.staticSubnet ? config.staticSubnet : DEFAULT_STATIC_MASK;
+  config.staticDns1 = config.staticDns1 ? config.staticDns1 : DEFAULT_STATIC_DNS1;
+  config.staticDns2 = config.staticDns2 ? config.staticDns2 : DEFAULT_STATIC_DNS2;
+
+  auto clampString = [](String& value, size_t maxLen) {
+    value.trim();
+    if (value.length() > maxLen) {
+      value = value.substring(0, maxLen);
+    }
+  };
+
+  clampString(config.wifiStaSsid, 32);
+  clampString(config.wifiStaPassword, 64);
+  clampString(config.wifiApSsid, 32);
+  clampString(config.wifiApPassword, 64);
+
+  if (config.artnetInput > 2) {
+    config.artnetInput = DEFAULT_ARTNET_INPUT;
+  }
+}
+
 String jsonEscape(const String& text)
 {
   String out;
@@ -165,6 +203,240 @@ String wifiAuthModeToText(wifi_auth_mode_t mode)
 
 Preferences g_prefs;
 WebServer g_server(80);
+
+namespace {
+
+constexpr const char* PREF_NAMESPACE = "pixelcfg";
+
+ArtNetNode::InterfacePreference toInterfacePreference(uint8_t value)
+{
+  switch (value) {
+    case 1: return ArtNetNode::InterfacePreference::WiFi;
+    case 2: return ArtNetNode::InterfacePreference::Auto;
+    default: return ArtNetNode::InterfacePreference::Ethernet;
+  }
+}
+
+EOrder toFastLedOrder(uint8_t value)
+{
+  switch (static_cast<LedColorOrder>(value)) {
+    case LedColorOrder::RBG: return RBG;
+    case LedColorOrder::GRB: return GRB;
+    case LedColorOrder::GBR: return GBR;
+    case LedColorOrder::BRG: return BRG;
+    case LedColorOrder::BGR: return BGR;
+    case LedColorOrder::RGB:
+    default:
+      return RGB;
+  }
+}
+
+template <EOrder ORDER>
+void addControllerForOrder(LedChipType chip, int count)
+{
+  switch (chip) {
+    case LedChipType::WS2812B:
+      FastLED.addLeds<WS2812B, LED_DATA_PIN, ORDER>(leds, count);
+      break;
+    case LedChipType::SK6812:
+      FastLED.addLeds<SK6812, LED_DATA_PIN, ORDER>(leds, count);
+      break;
+    case LedChipType::WS2811:
+    default:
+      FastLED.addLeds<WS2811, LED_DATA_PIN, ORDER>(leds, count);
+      break;
+  }
+}
+
+void configureFastLed(uint8_t chipType, uint8_t colorOrder, int count)
+{
+  LedChipType chip = static_cast<LedChipType>(chipType);
+  switch (toFastLedOrder(colorOrder)) {
+    case RBG: addControllerForOrder<RBG>(chip, count); break;
+    case GRB: addControllerForOrder<GRB>(chip, count); break;
+    case GBR: addControllerForOrder<GBR>(chip, count); break;
+    case BRG: addControllerForOrder<BRG>(chip, count); break;
+    case BGR: addControllerForOrder<BGR>(chip, count); break;
+    case RGB:
+    default:
+      addControllerForOrder<RGB>(chip, count);
+      break;
+  }
+}
+
+uint8_t channelsPerPixel(uint8_t chipType)
+{
+  if (static_cast<LedChipType>(chipType) == LedChipType::SK6812) {
+    return 4;
+  }
+  return 3;
+}
+
+}  // namespace
+
+void loadConfig()
+{
+  AppConfig cfg = makeDefaultConfig();
+
+  if (g_prefs.begin(PREF_NAMESPACE, true)) {
+    cfg.dhcpTimeoutMs     = g_prefs.getUInt("dhcp_timeout", cfg.dhcpTimeoutMs);
+    cfg.numLeds           = g_prefs.getUShort("num_leds", cfg.numLeds);
+    cfg.startUniverse     = g_prefs.getUShort("start_univ", cfg.startUniverse);
+    cfg.pixelsPerUniverse = g_prefs.getUShort("pix_per_univ", cfg.pixelsPerUniverse);
+    cfg.brightness        = g_prefs.getUChar("brightness", cfg.brightness);
+    cfg.chipType          = g_prefs.getUChar("chip", cfg.chipType);
+    cfg.colorOrder        = g_prefs.getUChar("order", cfg.colorOrder);
+    cfg.useDhcp           = g_prefs.getBool("use_dhcp", cfg.useDhcp);
+    cfg.fallbackToStatic  = g_prefs.getBool("fallback", cfg.fallbackToStatic);
+    cfg.staticIp          = g_prefs.getUInt("static_ip", cfg.staticIp);
+    cfg.staticGateway     = g_prefs.getUInt("static_gw", cfg.staticGateway);
+    cfg.staticSubnet      = g_prefs.getUInt("static_mask", cfg.staticSubnet);
+    cfg.staticDns1        = g_prefs.getUInt("static_dns1", cfg.staticDns1);
+    cfg.staticDns2        = g_prefs.getUInt("static_dns2", cfg.staticDns2);
+    cfg.wifiEnabled       = g_prefs.getBool("wifi_en", cfg.wifiEnabled);
+    cfg.wifiApMode        = g_prefs.getBool("wifi_ap", cfg.wifiApMode);
+    cfg.artnetInput       = g_prefs.getUChar("artnet_if", cfg.artnetInput);
+    cfg.wifiStaSsid       = g_prefs.getString("wifi_sta_ssid", cfg.wifiStaSsid);
+    cfg.wifiStaPassword   = g_prefs.getString("wifi_sta_pwd", cfg.wifiStaPassword);
+    cfg.wifiApSsid        = g_prefs.getString("wifi_ap_ssid", cfg.wifiApSsid);
+    cfg.wifiApPassword    = g_prefs.getString("wifi_ap_pwd", cfg.wifiApPassword);
+    g_prefs.end();
+  }
+
+  normalizeConfig(cfg);
+  g_config = cfg;
+}
+
+void saveConfig()
+{
+  AppConfig cfg = g_config;
+  normalizeConfig(cfg);
+
+  if (g_prefs.begin(PREF_NAMESPACE, false)) {
+    g_prefs.putUInt("dhcp_timeout", cfg.dhcpTimeoutMs);
+    g_prefs.putUShort("num_leds", cfg.numLeds);
+    g_prefs.putUShort("start_univ", cfg.startUniverse);
+    g_prefs.putUShort("pix_per_univ", cfg.pixelsPerUniverse);
+    g_prefs.putUChar("brightness", cfg.brightness);
+    g_prefs.putUChar("chip", cfg.chipType);
+    g_prefs.putUChar("order", cfg.colorOrder);
+    g_prefs.putBool("use_dhcp", cfg.useDhcp);
+    g_prefs.putBool("fallback", cfg.fallbackToStatic);
+    g_prefs.putUInt("static_ip", cfg.staticIp);
+    g_prefs.putUInt("static_gw", cfg.staticGateway);
+    g_prefs.putUInt("static_mask", cfg.staticSubnet);
+    g_prefs.putUInt("static_dns1", cfg.staticDns1);
+    g_prefs.putUInt("static_dns2", cfg.staticDns2);
+    g_prefs.putBool("wifi_en", cfg.wifiEnabled);
+    g_prefs.putBool("wifi_ap", cfg.wifiApMode);
+    g_prefs.putUChar("artnet_if", cfg.artnetInput);
+    g_prefs.putString("wifi_sta_ssid", cfg.wifiStaSsid);
+    g_prefs.putString("wifi_sta_pwd", cfg.wifiStaPassword);
+    g_prefs.putString("wifi_ap_ssid", cfg.wifiApSsid);
+    g_prefs.putString("wifi_ap_pwd", cfg.wifiApPassword);
+    g_prefs.end();
+  }
+
+  g_config = cfg;
+}
+
+void initializeFastLEDController()
+{
+  FastLED.clear(true);
+  FastLED.setDither(0);
+  configureFastLed(g_config.chipType, g_config.colorOrder, g_config.numLeds);
+}
+
+void applyConfig()
+{
+  normalizeConfig(g_config);
+
+  const uint16_t pixelsPerUniverse = std::max<uint16_t>(1, g_config.pixelsPerUniverse);
+  g_universeCount = static_cast<uint16_t>((g_config.numLeds + pixelsPerUniverse - 1) / pixelsPerUniverse);
+  if (g_universeCount == 0) {
+    g_universeCount = 1;
+  }
+
+  g_universeReceived.assign(g_universeCount, 0);
+
+  FastLED.setBrightness(g_config.brightness);
+  for (uint16_t i = g_config.numLeds; i < MAX_LEDS; ++i) {
+    leds[i] = CRGB::Black;
+  }
+  FastLED.show();
+
+  artnet.setInterfacePreference(toInterfacePreference(g_config.artnetInput));
+  artnet.setUniverseInfo(g_config.startUniverse, g_universeCount);
+}
+
+void onDmxFrame(uint16_t universe, uint16_t length, uint8_t sequence, uint8_t* data, IPAddress remoteIP)
+{
+  (void)remoteIP;
+
+  if (!data || length == 0) {
+    return;
+  }
+
+  if (universe < g_config.startUniverse) {
+    return;
+  }
+
+  uint16_t relativeUniverse = universe - g_config.startUniverse;
+  if (relativeUniverse >= g_universeCount) {
+    return;
+  }
+
+  const uint8_t cpp = channelsPerPixel(g_config.chipType);
+  if (cpp == 0) {
+    return;
+  }
+
+  const uint32_t pixelsAvailable = length / cpp;
+  uint32_t firstPixel = static_cast<uint32_t>(relativeUniverse) * g_config.pixelsPerUniverse;
+
+  for (uint32_t i = 0; i < pixelsAvailable; ++i) {
+    uint32_t pixelIndex = firstPixel + i;
+    if (pixelIndex >= g_config.numLeds) {
+      break;
+    }
+    uint32_t base = i * cpp;
+    leds[pixelIndex].r = data[base];
+    leds[pixelIndex].g = (cpp > 1) ? data[base + 1] : 0;
+    leds[pixelIndex].b = (cpp > 2) ? data[base + 2] : 0;
+  }
+
+  if (relativeUniverse < g_universeReceived.size()) {
+    g_universeReceived[relativeUniverse] = sequence ? sequence : 1;
+  }
+
+  static uint8_t s_lastSequence = 0;
+  static bool s_sequenceValid = false;
+
+  bool showNow = false;
+  if (sequence != 0) {
+    if (!s_sequenceValid || sequence != s_lastSequence) {
+      s_lastSequence = sequence;
+      s_sequenceValid = true;
+      std::fill(g_universeReceived.begin(), g_universeReceived.end(), 0);
+      g_universeReceived[relativeUniverse] = sequence;
+    }
+
+    showNow = std::all_of(g_universeReceived.begin(), g_universeReceived.end(), [sequence](uint8_t value) {
+      return value == sequence && sequence != 0;
+    });
+  } else {
+    showNow = true;
+  }
+
+  if (showNow) {
+    FastLED.show();
+    if (sequence != 0) {
+      std::fill(g_universeReceived.begin(), g_universeReceived.end(), 0);
+    }
+  }
+
+  ++g_dmxFrames;
+}
 
 bool g_firmwareUploadHandled = false;
 bool g_firmwareUpdateShouldRestart = false;
@@ -355,7 +627,7 @@ String buildConfigPage(const String& message)
 
 void handleConfigGet()
 {
-  g_server.send(200, "text/html", buildConfigPage());
+  g_server.send(200, "text/html", buildConfigPage(String()));
 }
 
 void handleConfigPost()
