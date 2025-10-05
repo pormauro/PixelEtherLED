@@ -2,7 +2,7 @@
 #include <WiFi.h>
 #include <ETH.h>
 #include <WiFiUdp.h>
-#include <Artnet.h>
+#include "ArtNetNode.h"
 #include <FastLED.h>
 #include <Preferences.h>
 #include <WebServer.h>
@@ -93,7 +93,7 @@ Preferences g_prefs;
 WebServer g_server(80);
 
 // ===================== ART-NET =====================
-Artnet artnet;
+ArtNetNode artnet;
 std::vector<uint8_t> g_universeReceived;
 uint16_t g_universeCount = 0;
 
@@ -343,6 +343,8 @@ void applyConfig()
   g_universeCount = std::max<uint16_t>(1, g_universeCount);
   g_universeReceived.assign(g_universeCount, 0);
 
+  artnet.setUniverseInfo(g_config.startUniverse, g_universeCount);
+
   FastLED.setBrightness(g_config.brightness);
   FastLED.clear(true);
 }
@@ -543,6 +545,7 @@ void setup()
   WiFi.onEvent(onWiFiEvent);
   bringUpEthernetWithDhcpFallback(g_config.dhcpTimeoutMs);
 
+  artnet.setNodeNames("PixelEtherLED", "PixelEtherLED Controller");
   artnet.begin();                      // responde a ArtPoll → Jinx "Scan"
   artnet.setArtDmxCallback(onDmxFrame);
 
