@@ -59,8 +59,9 @@ void ArtNetNode::begin(uint16_t port)
 {
   m_listenPort = port;
   m_udp.stop();
-  m_udp.begin(m_listenPort);
-  updateNetworkInfo();
+  m_udpBound = false;
+  m_boundIp = IPAddress((uint32_t)0);
+  refreshLocalInfo();
 }
 
 void ArtNetNode::setArtDmxCallback(ArtDmxCallback callback)
@@ -162,6 +163,17 @@ void ArtNetNode::refreshLocalInfo()
   }
 
   m_localIp = current;
+
+  if (!m_udpBound || m_boundIp != current) {
+    m_udp.stop();
+    if (current != IPAddress((uint32_t)0)) {
+      m_udp.begin(current, m_listenPort);
+    } else {
+      m_udp.begin(m_listenPort);
+    }
+    m_boundIp = current;
+    m_udpBound = true;
+  }
 
   esp_mac_type_t macType = ESP_MAC_ETH;
   if (active == ActiveInterface::WiFi) {
