@@ -18,15 +18,47 @@ static const IPAddress STATIC_DNS2 (8, 8, 8, 8);
 
 // ===================== LEDS =====================
 #define DATA_PIN      2
-#define LED_TYPE      WS2811
-#define COLOR_ORDER   BRG
-
 constexpr uint16_t MAX_LEDS             = 1024;
 constexpr uint16_t DEFAULT_NUM_LEDS     = 60;
 constexpr uint16_t DEFAULT_START_UNIVERSE = 0;
 constexpr uint16_t DEFAULT_PIXELS_PER_UNIVERSE = 170;      // 512/3
 constexpr uint8_t  DEFAULT_BRIGHTNESS   = 255;
 constexpr uint32_t DEFAULT_DHCP_TIMEOUT = 3000;             // ms
+
+enum class LedChipType : uint8_t {
+  WS2811 = 0,
+  WS2812B,
+  SK6812,
+  CHIP_TYPE_COUNT
+};
+
+enum class LedColorOrder : uint8_t {
+  RGB = 0,
+  RBG,
+  GRB,
+  GBR,
+  BRG,
+  BGR,
+  COLOR_ORDER_COUNT
+};
+
+constexpr uint8_t DEFAULT_CHIP_TYPE   = static_cast<uint8_t>(LedChipType::WS2811);
+constexpr uint8_t DEFAULT_COLOR_ORDER = static_cast<uint8_t>(LedColorOrder::BRG);
+
+const char* const CHIP_TYPE_NAMES[] = {
+  "WS2811",
+  "WS2812B",
+  "SK6812"
+};
+
+const char* const COLOR_ORDER_NAMES[] = {
+  "RGB",
+  "RBG",
+  "GRB",
+  "GBR",
+  "BRG",
+  "BGR"
+};
 
 CRGB leds[MAX_LEDS];
 
@@ -36,6 +68,8 @@ struct AppConfig {
   uint16_t startUniverse;
   uint16_t pixelsPerUniverse;
   uint8_t brightness;
+  uint8_t chipType;
+  uint8_t colorOrder;
 };
 
 AppConfig g_config = {
@@ -43,7 +77,9 @@ AppConfig g_config = {
   DEFAULT_NUM_LEDS,
   DEFAULT_START_UNIVERSE,
   DEFAULT_PIXELS_PER_UNIVERSE,
-  DEFAULT_BRIGHTNESS
+  DEFAULT_BRIGHTNESS,
+  DEFAULT_CHIP_TYPE,
+  DEFAULT_COLOR_ORDER
 };
 
 Preferences g_prefs;
@@ -183,6 +219,76 @@ T clampValue(T value, T minValue, T maxValue)
   return std::max(minValue, std::min(value, maxValue));
 }
 
+uint8_t clampIndex(uint8_t value, uint8_t maxValue, uint8_t fallback)
+{
+  if (value >= maxValue) return fallback;
+  return value;
+}
+
+void normalizeConfig(AppConfig& config)
+{
+  config.numLeds = clampValue<uint16_t>(config.numLeds, 1, MAX_LEDS);
+  config.pixelsPerUniverse = clampValue<uint16_t>(config.pixelsPerUniverse, 1, MAX_LEDS);
+  config.brightness = clampValue<uint8_t>(config.brightness, 1, 255);
+  if (config.dhcpTimeoutMs < 500) {
+    config.dhcpTimeoutMs = 500; // mínimo razonable
+  }
+  config.chipType   = clampIndex(config.chipType, static_cast<uint8_t>(LedChipType::CHIP_TYPE_COUNT), DEFAULT_CHIP_TYPE);
+  config.colorOrder = clampIndex(config.colorOrder, static_cast<uint8_t>(LedColorOrder::COLOR_ORDER_COUNT), DEFAULT_COLOR_ORDER);
+}
+
+template <typename CHIPSET>
+void addControllerForOrder(LedColorOrder order)
+{
+  switch (order) {
+    case LedColorOrder::RGB: FastLED.addLeds<CHIPSET, DATA_PIN, RGB>(leds, MAX_LEDS); break;
+    case LedColorOrder::RBG: FastLED.addLeds<CHIPSET, DATA_PIN, RBG>(leds, MAX_LEDS); break;
+    case LedColorOrder::GRB: FastLED.addLeds<CHIPSET, DATA_PIN, GRB>(leds, MAX_LEDS); break;
+    case LedColorOrder::GBR: FastLED.addLeds<CHIPSET, DATA_PIN, GBR>(leds, MAX_LEDS); break;
+    case LedColorOrder::BRG: FastLED.addLeds<CHIPSET, DATA_PIN, BRG>(leds, MAX_LEDS); break;
+    case LedColorOrder::BGR: FastLED.addLeds<CHIPSET, DATA_PIN, BGR>(leds, MAX_LEDS); break;
+    default: FastLED.addLeds<CHIPSET, DATA_PIN, BRG>(leds, MAX_LEDS); break;
+  }
+}
+
+void initializeFastLEDController()
+{
+  static bool initialized = false;
+  if (initialized) return;
+
+  LedChipType chip = static_cast<LedChipType>(clampIndex(g_config.chipType, static_cast<uint8_t>(LedChipType::CHIP_TYPE_COUNT), DEFAULT_CHIP_TYPE));
+  LedColorOrder order = static_cast<LedColorOrder>(clampIndex(g_config.colorOrder, static_cast<uint8_t>(LedColorOrder::COLOR_ORDER_COUNT), DEFAULT_COLOR_ORDER));
+
+  switch (chip) {
+    case LedChipType::WS2811:
+      addControllerForOrder<WS2811>(order);
+      break;
+    case LedChipType::WS2812B:
+      addControllerForOrder<WS2812B>(order);
+      break;
+    case LedChipType::SK6812:
+      addControllerForOrder<SK6812>(order);
+      break;
+    default:
+      addControllerForOrder<WS2811>(order);
+      break;
+  }
+
+  initialized = true;
+}
+
+const char* getChipName(uint8_t value)
+{
+  uint8_t idx = clampIndex(value, static_cast<uint8_t>(LedChipType::CHIP_TYPE_COUNT), DEFAULT_CHIP_TYPE);
+  return CHIP_TYPE_NAMES[idx];
+}
+
+const char* getColorOrderName(uint8_t value)
+{
+  uint8_t idx = clampIndex(value, static_cast<uint8_t>(LedColorOrder::COLOR_ORDER_COUNT), DEFAULT_COLOR_ORDER);
+  return COLOR_ORDER_NAMES[idx];
+}
+
 void loadConfig()
 {
   g_config = {
@@ -190,7 +296,9 @@ void loadConfig()
     DEFAULT_NUM_LEDS,
     DEFAULT_START_UNIVERSE,
     DEFAULT_PIXELS_PER_UNIVERSE,
-    DEFAULT_BRIGHTNESS
+    DEFAULT_BRIGHTNESS,
+    DEFAULT_CHIP_TYPE,
+    DEFAULT_COLOR_ORDER
   };
 
   if (g_prefs.begin("pixelcfg", true)) {
@@ -199,15 +307,12 @@ void loadConfig()
     g_config.startUniverse   = g_prefs.getUShort("startUni", g_config.startUniverse);
     g_config.pixelsPerUniverse = g_prefs.getUShort("pixPerUni", g_config.pixelsPerUniverse);
     g_config.brightness      = g_prefs.getUChar("brightness", g_config.brightness);
+    g_config.chipType        = g_prefs.getUChar("chipType", g_config.chipType);
+    g_config.colorOrder      = g_prefs.getUChar("colorOrder", g_config.colorOrder);
     g_prefs.end();
   }
 
-  g_config.numLeds = clampValue<uint16_t>(g_config.numLeds, 1, MAX_LEDS);
-  g_config.pixelsPerUniverse = clampValue<uint16_t>(g_config.pixelsPerUniverse, 1, MAX_LEDS);
-  g_config.brightness = clampValue<uint8_t>(g_config.brightness, 1, 255);
-  if (g_config.dhcpTimeoutMs < 500) {
-    g_config.dhcpTimeoutMs = 500; // mínimo razonable
-  }
+  normalizeConfig(g_config);
 }
 
 void saveConfig()
@@ -218,16 +323,15 @@ void saveConfig()
     g_prefs.putUShort("startUni", g_config.startUniverse);
     g_prefs.putUShort("pixPerUni", g_config.pixelsPerUniverse);
     g_prefs.putUChar("brightness", g_config.brightness);
+    g_prefs.putUChar("chipType", g_config.chipType);
+    g_prefs.putUChar("colorOrder", g_config.colorOrder);
     g_prefs.end();
   }
 }
 
 void applyConfig()
 {
-  g_config.numLeds = clampValue<uint16_t>(g_config.numLeds, 1, MAX_LEDS);
-  g_config.pixelsPerUniverse = clampValue<uint16_t>(g_config.pixelsPerUniverse, 1, MAX_LEDS);
-  g_config.brightness = clampValue<uint8_t>(g_config.brightness, 1, 255);
-
+  normalizeConfig(g_config);
   g_universeCount = (g_config.numLeds + g_config.pixelsPerUniverse - 1) / g_config.pixelsPerUniverse;
   g_universeCount = std::max<uint16_t>(1, g_universeCount);
   g_universeReceived.assign(g_universeCount, 0);
@@ -269,6 +373,26 @@ String buildConfigPage(const String& message)
   html += "<input type='number' id='pixelsPerUniverse' name='pixelsPerUniverse' min='1' max='512' value='" + String(g_config.pixelsPerUniverse) + "'>";
   html += F("<label for='brightness'>Brillo máximo (0-255)</label>");
   html += "<input type='number' id='brightness' name='brightness' min='1' max='255' value='" + String(g_config.brightness) + "'>";
+  html += F("<label for='chipType'>Tipo de chip LED</label>");
+  html += F("<select id='chipType' name='chipType'>");
+  for (uint8_t i = 0; i < static_cast<uint8_t>(LedChipType::CHIP_TYPE_COUNT); ++i) {
+    html += "<option value='" + String(i) + "'";
+    if (g_config.chipType == i) html += " selected";
+    html += ">";
+    html += CHIP_TYPE_NAMES[i];
+    html += F("</option>");
+  }
+  html += F("</select>");
+  html += F("<label for='colorOrder'>Orden de color</label>");
+  html += F("<select id='colorOrder' name='colorOrder'>");
+  for (uint8_t i = 0; i < static_cast<uint8_t>(LedColorOrder::COLOR_ORDER_COUNT); ++i) {
+    html += "<option value='" + String(i) + "'";
+    if (g_config.colorOrder == i) html += " selected";
+    html += ">";
+    html += COLOR_ORDER_NAMES[i];
+    html += F("</option>");
+  }
+  html += F("</select>");
   html += F("<button type='submit'>Guardar configuración</button>");
   html += F("</form>");
   html += F("<div class='card'>");
@@ -279,6 +403,8 @@ String buildConfigPage(const String& message)
   html += "</div><div><strong>Frames DMX:</strong><br>" + String((unsigned long)g_dmxFrames) + "</div>";
   html += "<div><strong>Brillo:</strong><br>" + String(g_config.brightness) + "/255";
   html += "</div><div><strong>DHCP timeout:</strong><br>" + String(g_config.dhcpTimeoutMs) + " ms";
+  html += "</div><div><strong>Chip LED:</strong><br>" + String(getChipName(g_config.chipType)) + "</div>";
+  html += "<div><strong>Orden:</strong><br>" + String(getColorOrderName(g_config.colorOrder)) + "</div>";
   html += F("</div></div>");
   html += F("<div class='card'>");
   html += F("<h2>Consejos</h2><ul><li>Si ampliás la tira LED, incrementá el parámetro <em>Cantidad de LEDs activos</em>.</li><li>Reducí el brillo máximo para ahorrar consumo o evitar saturación.</li><li>Ajustá el tiempo de espera de DHCP si tu red tarda más en asignar IP.</li><li>El valor de pixeles por universo determina cuántos LEDs se controlan por paquete Art-Net.</li></ul>");
@@ -322,12 +448,33 @@ void handleConfigPost()
     parsed = std::max(1L, std::min<long>(parsed, 255));
     newConfig.brightness = static_cast<uint8_t>(parsed);
   }
+  if (g_server.hasArg("chipType")) {
+    long parsed = g_server.arg("chipType").toInt();
+    if (parsed < 0) parsed = DEFAULT_CHIP_TYPE;
+    newConfig.chipType = static_cast<uint8_t>(parsed);
+  }
+  if (g_server.hasArg("colorOrder")) {
+    long parsed = g_server.arg("colorOrder").toInt();
+    if (parsed < 0) parsed = DEFAULT_COLOR_ORDER;
+    newConfig.colorOrder = static_cast<uint8_t>(parsed);
+  }
+
+  normalizeConfig(newConfig);
+
+  bool requiresRestart = (newConfig.chipType != g_config.chipType) ||
+                         (newConfig.colorOrder != g_config.colorOrder);
 
   g_config = newConfig;
   applyConfig();
   saveConfig();
 
-  g_server.send(200, "text/html", buildConfigPage("Configuración actualizada correctamente."));
+  if (requiresRestart) {
+    g_server.send(200, "text/html", buildConfigPage("Configuración actualizada. Reiniciando para aplicar tipo de chip/orden de color."));
+    delay(500);
+    ESP.restart();
+  } else {
+    g_server.send(200, "text/html", buildConfigPage("Configuración actualizada correctamente."));
+  }
 }
 
 void handleRoot()
@@ -379,7 +526,7 @@ void setup()
 
   loadConfig();
 
-  FastLED.addLeds<LED_TYPE, DATA_PIN, COLOR_ORDER>(leds, MAX_LEDS);
+  initializeFastLEDController();
   FastLED.clear(true);
   FastLED.setDither(0);
   FastLED.setBrightness(g_config.brightness);
