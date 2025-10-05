@@ -400,6 +400,9 @@ void handleRoot();
 String buildConfigPage(const String& message = String());
 void handleFirmwareUpdatePost();
 void handleFirmwareUpload();
+String buildVisualizerPage();
+void handleVisualizerGet();
+void handleLedStateJson();
 
 void onDmxFrame(uint16_t universe, uint16_t length, uint8_t sequence,
                 uint8_t* data, IPAddress remoteIP)
@@ -906,6 +909,85 @@ String buildConfigPage(const String& message)
   return html;
 }
 
+String buildVisualizerPage()
+{
+  const uint16_t ledCount = std::min<uint16_t>(g_config.numLeds, MAX_LEDS);
+  const uint16_t fallbackWidth = ledCount > 0 ? std::min<uint16_t>(ledCount, static_cast<uint16_t>(16)) : static_cast<uint16_t>(1);
+  const uint16_t safeWidth = fallbackWidth == 0 ? static_cast<uint16_t>(1) : fallbackWidth;
+  const uint16_t safeHeight = std::max<uint16_t>(static_cast<uint16_t>(1), static_cast<uint16_t>((ledCount + safeWidth - 1) / safeWidth));
+
+  String html;
+  html.reserve(12288);
+
+  html += F("<!DOCTYPE html><html lang='es'><head><meta charset='utf-8'>");
+  html += F("<meta name='viewport' content='width=device-width,initial-scale=1'>");
+  html += F("<title>PixelEtherLED - Visualizador</title>");
+  html += F("<style>body{font-family:Segoe UI,Helvetica,Arial,sans-serif;background:#0c0f1a;color:#f0f0f0;margin:0;padding:0;}\n");
+  html += F("header{background:#121a2a;padding:1.5rem;text-align:center;}\n");
+  html += F("h1{margin:0;font-size:1.8rem;}\nsection{padding:1.5rem;}\n");
+  html += F(".card{max-width:960px;margin:0 auto;background:#141d30;padding:1.5rem;border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,0.45);}\n");
+  html += F(".controls{display:flex;flex-wrap:wrap;gap:1rem;margin-bottom:1.5rem;}\n");
+  html += F(".controls label{display:block;font-size:0.85rem;color:#9bb3ff;margin-bottom:0.35rem;}\n");
+  html += F(".controls .field{flex:1 1 140px;}\n");
+  html += F("input[type=number],select{width:100%;padding:0.6rem;border-radius:8px;border:1px solid #23314d;background:#0c1424;color:#f0f0f0;}\n");
+  html += F(".field.checkbox{display:flex;align-items:flex-end;}\n");
+  html += F(".field.checkbox label{margin-bottom:0;font-size:0.9rem;color:#f0f0f0;display:flex;align-items:center;gap:0.5rem;}\n");
+  html += F(".grid{display:grid;gap:4px;grid-auto-rows:minmax(32px,1fr);}\n");
+  html += F(".led-cell{position:relative;display:flex;align-items:center;justify-content:center;border-radius:6px;background:#1f2b44;color:#fff;font-size:0.9rem;font-weight:600;transition:transform 0.1s ease;}\n");
+  html += F(".led-cell:hover{transform:scale(1.05);box-shadow:0 0 0 2px rgba(255,255,255,0.15);}\n");
+  html += F(".led-index{z-index:1;}\n");
+  html += F(".led-overlay{position:absolute;bottom:4px;right:6px;font-size:0.7rem;font-weight:500;background:rgba(0,0,0,0.45);padding:1px 4px;border-radius:4px;}\n");
+  html += F(".info-panel{margin-top:1rem;padding:0.75rem 1rem;background:#101829;border-radius:8px;border:1px solid #23314d;color:#cfd8f7;font-size:0.95rem;}\n");
+  html += F(".info-panel strong{color:#fff;}\n");
+  html += F("a.link{color:#9bb3ff;text-decoration:none;}a.link:hover{text-decoration:underline;}\n");
+  html += F("</style></head><body>");
+  html += F("<header><h1>PixelEtherLED</h1><p>Visualizador en tiempo real</p></header>");
+  html += F("<section>");
+  html += F("<div class='card'>");
+  html += F("<p style='margin-top:0;margin-bottom:1.5rem;font-size:0.95rem;color:#cfd8f7;'>Visualizá cómo llega cada píxel Art-Net al controlador y verificá el orden correcto sin salir del navegador.</p>");
+  html += F("<div class='controls'>");
+  html += F("<div class='field'><label for='matrixWidth'>Ancho</label>");
+  html += "<input type='number' id='matrixWidth' min='1' value='" + String(safeWidth) + "'>";
+  html += F("</div>");
+  html += F("<div class='field'><label for='matrixHeight'>Alto</label>");
+  html += "<input type='number' id='matrixHeight' min='1' value='" + String(safeHeight) + "'>";
+  html += F("</div>");
+  html += F("<div class='field'><label for='scanMode'>Recorrido</label>");
+  html += F("<select id='scanMode'><option value='row'>Por filas</option><option value='column'>Por columnas</option></select>");
+  html += F("</div>");
+  html += F("<div class='field'><label for='startCorner'>Esquina inicial</label>");
+  html += F("<select id='startCorner'><option value='tl'>Superior izquierda</option><option value='tr'>Superior derecha</option><option value='bl'>Inferior izquierda</option><option value='br'>Inferior derecha</option></select>");
+  html += F("</div>");
+  html += F("<div class='field checkbox'><label for='serpentine'><input type='checkbox' id='serpentine'> Serpenteado</label></div>");
+  html += F("</div>");
+  html += "<div id='ledSummary' style='margin-bottom:1rem;font-size:0.9rem;color:#96a2c5;'>LEDs activos: <strong>" + String(ledCount) + "</strong></div>";
+  html += F("<div id='visualizerGrid' class='grid'></div>");
+  html += F("<div class='info-panel'>");
+  html += F("<div><strong>LED seleccionado:</strong> <span id='infoIndex'>-</span></div>");
+  html += F("<div><strong>Color:</strong> <span id='infoColor'>-</span></div>");
+  html += F("</div>");
+  html += F("<p style='margin-top:1.5rem;font-size:0.9rem;'><a class='link' href='/config'>&larr; Volver al panel de configuración</a></p>");
+  html += F("</div>");
+  html += F("</section>");
+  html += F("<script>");
+  html += "const totalLeds=" + String(ledCount) + ";";
+  html += F("const grid=document.getElementById('visualizerGrid');const widthInput=document.getElementById('matrixWidth');const heightInput=document.getElementById('matrixHeight');const serpInput=document.getElementById('serpentine');const scanInput=document.getElementById('scanMode');const cornerInput=document.getElementById('startCorner');const infoIndex=document.getElementById('infoIndex');const infoColor=document.getElementById('infoColor');const cellMap=new Map();let latestData=[];");
+  html += F("if(totalLeds===0){[widthInput,heightInput,serpInput,scanInput,cornerInput].forEach(function(el){if(el){el.disabled=true;}});} ");
+  html += F("function ensureDimensions(){let width=parseInt(widthInput.value,10);if(!Number.isFinite(width)||width<1){width=1;widthInput.value='1';}let height=parseInt(heightInput.value,10);if(!Number.isFinite(height)||height<1){height=1;heightInput.value='1';}if(totalLeds>0){const minHeight=Math.ceil(totalLeds/width);if(height<minHeight){height=minHeight;heightInput.value=String(height);}}return{width,height};}");
+  html += F("function layoutCells(width,height,serp,mode,corner){const cells=[];let led=0;if(totalLeds===0){return cells;}if(mode==='row'){rows:for(let y=0;y<height;y++){let xs=Array.from({length:width},(_,i)=>i);if(serp&&y%2===1){xs.reverse();}for(const x of xs){if(led>=totalLeds){break rows;}cells.push({ledIndex:led,x:x,y:y});led++;}}}else{cols:for(let x=0;x<width;x++){let ys=Array.from({length:height},(_,i)=>i);if(serp&&x%2===1){ys.reverse();}for(const y of ys){if(led>=totalLeds){break cols;}cells.push({ledIndex:led,x:x,y:y});led++;}}}return cells.map(function(cell){let px=cell.x;let py=cell.y;if(corner==='tr'||corner==='br'){px=width-1-px;}if(corner==='bl'||corner==='br'){py=height-1-py;}return{ledIndex:cell.ledIndex,x:px,y:py};});}");
+  html += F("function rebuildGrid(){cellMap.clear();grid.innerHTML='';const dims=ensureDimensions();const width=dims.width;const height=dims.height;grid.style.gridTemplateColumns='repeat('+width+', minmax(32px,1fr))';if(totalLeds===0){const msg=document.createElement('p');msg.textContent='No hay LEDs configurados en este dispositivo.';msg.style.color='#cfd8f7';msg.style.fontSize='0.95rem';grid.appendChild(msg);return;}const cells=layoutCells(width,height,serpInput.checked,scanInput.value,cornerInput.value);cells.forEach(function(cell){const el=document.createElement('div');el.className='led-cell';el.style.gridColumn=String(cell.x+1);el.style.gridRow=String(cell.y+1);const idx=document.createElement('div');idx.className='led-index';idx.textContent=cell.ledIndex;el.appendChild(idx);const overlay=document.createElement('div');overlay.className='led-overlay';overlay.textContent='RGB';el.appendChild(overlay);el.dataset.index=cell.ledIndex;el.title='LED '+cell.ledIndex;el.addEventListener('mouseenter',function(){const rgb=el.dataset.rgb||'-, -, -';infoIndex.textContent=cell.ledIndex;infoColor.textContent=rgb;});cellMap.set(cell.ledIndex,el);grid.appendChild(el);});applyColors();}");
+  html += F("function applyColors(){if(!Array.isArray(latestData)){return;}latestData.forEach(function(entry){const cell=cellMap.get(entry.index);if(!cell){return;}const color='rgb('+entry.r+','+entry.g+','+entry.b+')';cell.style.backgroundColor=color;const overlay=cell.querySelector('.led-overlay');if(overlay){overlay.textContent=entry.r+','+entry.g+','+entry.b;}cell.dataset.rgb=entry.r+', '+entry.g+', '+entry.b;cell.title='LED '+entry.index+'\nR: '+entry.r+' G: '+entry.g+' B: '+entry.b;const brightness=0.2126*entry.r+0.7152*entry.g+0.0722*entry.b;cell.style.color=brightness>140?'#000':'#fff';if(overlay){overlay.style.backgroundColor=brightness>140?'rgba(0,0,0,0.25)':'rgba(0,0,0,0.55)';}});}");
+  html += F("function poll(){fetch('/api/led_state',{cache:'no-store'}).then(function(res){if(!res.ok){throw new Error('http');}return res.json();}).then(function(data){if(data&&Array.isArray(data.leds)){latestData=data.leds;applyColors();}}).catch(function(err){console.debug('visualizador: error',err);});}");
+  html += F("widthInput.addEventListener('change',rebuildGrid);heightInput.addEventListener('change',rebuildGrid);serpInput.addEventListener('change',rebuildGrid);scanInput.addEventListener('change',rebuildGrid);cornerInput.addEventListener('change',rebuildGrid);rebuildGrid();poll();setInterval(poll,250);");
+  html += F("</script></body></html>");
+  return html;
+}
+
+void handleVisualizerGet()
+{
+  g_server.send(200, "text/html", buildVisualizerPage());
+}
+
 void handleConfigGet()
 {
   g_server.send(200, "text/html", buildConfigPage());
@@ -1266,6 +1348,31 @@ void bringUpEthernet(const AppConfig& config)
   }
 }
 
+void handleLedStateJson()
+{
+  const uint16_t ledCount = std::min<uint16_t>(g_config.numLeds, MAX_LEDS);
+  String json;
+  json.reserve(static_cast<size_t>(ledCount) * 30 + 32);
+  json += F("{\"leds\":[");
+  for (uint16_t i = 0; i < ledCount; ++i) {
+    if (i > 0) json += ',';
+    const CRGB& color = leds[i];
+    json += F("{\"index\":");
+    json += String(i);
+    json += F(",\"r\":");
+    json += String(static_cast<uint8_t>(color.r));
+    json += F(",\"g\":");
+    json += String(static_cast<uint8_t>(color.g));
+    json += F(",\"b\":");
+    json += String(static_cast<uint8_t>(color.b));
+    json += F("}");
+  }
+  json += F("]}");
+
+  g_server.sendHeader("Cache-Control", "no-store");
+  g_server.send(200, "application/json", json);
+}
+
 void handleWifiScan()
 {
   int16_t n = WiFi.scanNetworks(/*async=*/false, /*show_hidden=*/true);
@@ -1331,6 +1438,8 @@ void setup()
   g_server.on("/", HTTP_GET, handleRoot);
   g_server.on("/config", HTTP_GET, handleConfigGet);
   g_server.on("/config", HTTP_POST, handleConfigPost);
+  g_server.on("/visualizer", HTTP_GET, handleVisualizerGet);
+  g_server.on("/api/led_state", HTTP_GET, handleLedStateJson);
   g_server.on("/update", HTTP_GET, handleRoot);
   g_server.on("/update", HTTP_POST, handleFirmwareUpdatePost, handleFirmwareUpload);
   g_server.on("/wifi_scan", HTTP_GET, handleWifiScan);
