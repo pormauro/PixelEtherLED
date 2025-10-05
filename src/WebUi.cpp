@@ -124,6 +124,10 @@ String renderConfigPage(const AppConfig& config,
   html += F("label{display:block;margin-bottom:0.4rem;font-weight:600;}\n");
   html += F("input[type=number],input[type=text],input[type=password],select{width:100%;padding:0.65rem 0.75rem;border-radius:10px;border:1px solid #23314d;background:#0b1322;color:#f0f0f0;margin-bottom:1.1rem;box-sizing:border-box;}\n");
   html += F("input[type=number]:focus,input[type=text]:focus,input[type=password]:focus,select:focus{outline:none;border-color:#3f7bff;box-shadow:0 0 0 2px rgba(63,123,255,0.25);}\n");
+  html += F(".password-field{position:relative;display:flex;align-items:center;}\n");
+  html += F(".password-field input{flex:1;padding-right:2.5rem;}\n");
+  html += F(".password-field .toggle-password{position:absolute;right:0.6rem;top:50%;transform:translateY(-50%);background:transparent;border:none;color:#9bb3ff;cursor:pointer;font-size:1.1rem;padding:0.25rem;line-height:1;}\n");
+  html += F(".password-field .toggle-password:hover,.password-field .toggle-password:focus{color:#ffffff;outline:none;}\n");
   html += F(".dual{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:1rem;}\n");
   html += F(".wifi-group{margin-bottom:1.25rem;padding:1.1rem;border-radius:12px;background:rgba(0,114,255,0.08);border:1px solid rgba(76,142,255,0.35);}\n");
   html += F(".wifi-tools{display:flex;flex-wrap:wrap;align-items:center;gap:0.75rem;margin-bottom:1rem;}\n");
@@ -221,7 +225,10 @@ String renderConfigPage(const AppConfig& config,
   html += "<input type='text' id='wifiStaSsid' name='wifiStaSsid' list='wifiNetworks' value='" + wifiStaSsidEsc + "'>";
   html += F("<datalist id='wifiNetworks'></datalist>");
   html += F("<label for='wifiStaPassword'>Contraseña</label>");
+  html += F("<div class='password-field'>");
   html += "<input type='password' id='wifiStaPassword' name='wifiStaPassword' value='" + wifiStaPassEsc + "'>";
+  html += F("<button type='button' class='toggle-password' data-target='wifiStaPassword' aria-label='Mostrar contraseña'>👁️</button>");
+  html += F("</div>");
   html += F("<div class='wifi-tools'>");
   html += F("<button type='button' class='secondary' id='wifiScanButton'>Escanear redes Wi-Fi</button>");
   html += F("<div id='wifiScanStatus' class='wifi-scan-status wifi-status'></div>");
@@ -232,7 +239,10 @@ String renderConfigPage(const AppConfig& config,
   html += F("<label for='wifiApSsid'>SSID del punto de acceso</label>");
   html += "<input type='text' id='wifiApSsid' name='wifiApSsid' value='" + wifiApSsidEsc + "'>";
   html += F("<label for='wifiApPassword'>Contraseña (mínimo 8 caracteres, dejar vacío para abierto)</label>");
+  html += F("<div class='password-field'>");
   html += "<input type='password' id='wifiApPassword' name='wifiApPassword' value='" + wifiApPassEsc + "'>";
+  html += F("<button type='button' class='toggle-password' data-target='wifiApPassword' aria-label='Mostrar contraseña'>👁️</button>");
+  html += F("</div>");
   html += F("<p style='margin:0;font-size:0.85rem;color:#94a7df;'>Los cambios Wi-Fi se aplican inmediatamente al guardar.</p>");
   html += F("</div>");
   html += F("</section>");
@@ -316,8 +326,30 @@ String renderConfigPage(const AppConfig& config,
 
   html += F("</div><footer>PixelEtherLED &bull; Panel de control web</footer>");
 
-  static const char PROGMEM kWifiScript[] = R"rawliteral(
+static const char PROGMEM kWifiScript[] = R"rawliteral(
 <script>
+const passwordToggles = document.querySelectorAll('.toggle-password');
+
+passwordToggles.forEach((btn) => {
+  const targetId = btn.getAttribute('data-target');
+  const input = document.getElementById(targetId);
+  if (!input) return;
+
+  function updateState() {
+    const showing = input.type === 'text';
+    btn.textContent = showing ? '🙈' : '👁️';
+    btn.setAttribute('aria-label', showing ? 'Ocultar contraseña' : 'Mostrar contraseña');
+    btn.setAttribute('aria-pressed', showing ? 'true' : 'false');
+  }
+
+  btn.addEventListener('click', () => {
+    input.type = input.type === 'password' ? 'text' : 'password';
+    updateState();
+  });
+
+  updateState();
+});
+
 const wifiEnabledEl = document.getElementById('wifiEnabled');
 const wifiModeEl = document.getElementById('wifiMode');
 const wifiStaEl = document.getElementById('wifiStaConfig');
