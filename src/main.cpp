@@ -238,7 +238,7 @@ void normalizeConfig(AppConfig& config)
 }
 
 template <typename CHIPSET>
-void addControllerForOrder(LedColorOrder order)
+void addFastLedControllerForOrder(LedColorOrder order)
 {
   switch (order) {
     case LedColorOrder::RGB: FastLED.addLeds<CHIPSET, DATA_PIN, RGB>(leds, MAX_LEDS); break;
@@ -261,16 +261,16 @@ void initializeFastLEDController()
 
   switch (chip) {
     case LedChipType::WS2811:
-      addControllerForOrder<WS2811>(order);
+      addFastLedControllerForOrder<WS2811>(order);
       break;
     case LedChipType::WS2812B:
-      addControllerForOrder<WS2812B>(order);
+      addFastLedControllerForOrder<WS2812B>(order);
       break;
     case LedChipType::SK6812:
-      addControllerForOrder<SK6812>(order);
+      addFastLedControllerForOrder<SK6812>(order);
       break;
     default:
-      addControllerForOrder<WS2811>(order);
+      addFastLedControllerForOrder<WS2811>(order);
       break;
   }
 
