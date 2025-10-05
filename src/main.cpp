@@ -953,8 +953,10 @@ void handleConfigPost()
   g_config = newConfig;
   applyConfig();
   saveConfig();
-  bringUpEthernet(g_config);
+  // Wi-Fi bring-up switches the default LwIP interface to the wireless stack.
+  // Re-initialise Ethernet afterwards so Art-Net binds to the wired interface.
   bringUpWiFi(g_config);
+  bringUpEthernet(g_config);
 
   if (requiresRestart) {
     g_server.send(200, "text/html", buildConfigPage("Configuración actualizada. Reiniciando para aplicar tipo de chip/orden de color."));
@@ -1238,8 +1240,10 @@ void setup()
 
   WiFi.onEvent(onWiFiEvent);
   WiFi.persistent(false);
-  bringUpEthernet(g_config);
+  // Wi-Fi bring-up switches the default LwIP interface to the wireless stack.
+  // Re-initialise Ethernet afterwards so Art-Net binds to the wired interface.
   bringUpWiFi(g_config);
+  bringUpEthernet(g_config);
 
   artnet.setNodeNames("PixelEtherLED", "PixelEtherLED Controller");
   artnet.begin();                      // responde a ArtPoll → Jinx "Scan"
