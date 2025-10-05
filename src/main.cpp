@@ -8,6 +8,7 @@
 #include <WebServer.h>
 #include <Update.h>
 #include <algorithm>
+#include <cstdio>
 #include <vector>
 
 #include "AppConfig.h"
@@ -72,6 +73,10 @@ void bringUpWiFi(const AppConfig& config);
 void handleWifiScan();
 String jsonEscape(const String& text);
 String wifiAuthModeToText(wifi_auth_mode_t mode);
+WebUiRuntime makeRuntimeSnapshot();
+String buildVisualizerPage();
+void handleVisualizer();
+void handleLedPixels();
 
 AppConfig g_config = makeDefaultConfig();
 
@@ -602,7 +607,8 @@ void saveConfig();
 void handleConfigGet();
 void handleConfigPost();
 void handleRoot();
-String buildConfigPage(const String& message)
+
+WebUiRuntime makeRuntimeSnapshot()
 {
   WebUiRuntime runtime{};
   runtime.ethLinkUp = eth_link_up;
@@ -620,8 +626,19 @@ String buildConfigPage(const String& message)
   runtime.artnetIp = artnet.localIp();
   runtime.universeCount = g_universeCount;
   runtime.dmxFrames = g_dmxFrames;
+  return runtime;
+}
 
+String buildConfigPage(const String& message)
+{
+  WebUiRuntime runtime = makeRuntimeSnapshot();
   return renderConfigPage(g_config, runtime, message);
+}
+
+String buildVisualizerPage()
+{
+  WebUiRuntime runtime = makeRuntimeSnapshot();
+  return renderVisualizerPage(g_config, runtime);
 }
 
 
@@ -758,6 +775,11 @@ void handleRoot()
 {
   g_server.sendHeader("Location", "/config", true);
   g_server.send(302, "text/plain", "Redireccionando a /config");
+}
+
+void handleVisualizer()
+{
+  g_server.send(200, "text/html", buildVisualizerPage());
 }
 
 void handleFirmwareUpload()
@@ -1007,6 +1029,33 @@ void handleWifiScan()
   WiFi.scanDelete();
 }
 
+void handleLedPixels()
+{
+  const uint16_t count = g_config.numLeds;
+  String json;
+  json.reserve(static_cast<size_t>(count) * 9 + 96);
+  json += F("{\"numLeds\":");
+  json += String(count);
+  json += F(",\"universeCount\":");
+  json += String(g_universeCount);
+  json += F(",\"dmxFrames\":");
+  json += String(static_cast<unsigned long>(g_dmxFrames));
+  json += F(",\"leds\":[");
+  for (uint16_t i = 0; i < count; ++i) {
+    if (i > 0) {
+      json += ',';
+    }
+    const CRGB& c = leds[i];
+    char buffer[10];
+    snprintf(buffer, sizeof(buffer), "\"#%02X%02X%02X\"", c.r, c.g, c.b);
+    json += buffer;
+  }
+  json += F("]}");
+
+  g_server.sendHeader("Cache-Control", "no-store");
+  g_server.send(200, "application/json", json);
+}
+
 void setup()
 {
   Serial.begin(115200);
@@ -1040,9 +1089,11 @@ void setup()
   g_server.on("/", HTTP_GET, handleRoot);
   g_server.on("/config", HTTP_GET, handleConfigGet);
   g_server.on("/config", HTTP_POST, handleConfigPost);
+  g_server.on("/visualizer", HTTP_GET, handleVisualizer);
   g_server.on("/update", HTTP_GET, handleRoot);
   g_server.on("/update", HTTP_POST, handleFirmwareUpdatePost, handleFirmwareUpload);
   g_server.on("/wifi_scan", HTTP_GET, handleWifiScan);
+  g_server.on("/api/led_pixels", HTTP_GET, handleLedPixels);
   g_server.begin();
 
   Serial.println("[ARTNET] Listo");

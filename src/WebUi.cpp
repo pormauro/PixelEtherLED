@@ -116,6 +116,7 @@ String renderConfigPage(const AppConfig& config,
   html += F(".menu-item.wifi{background:linear-gradient(135deg,#00c6ff,#0072ff);}\n");
   html += F(".menu-item.leds{background:linear-gradient(135deg,#ff8a00,#e52e71);}\n");
   html += F(".menu-item.system{background:linear-gradient(135deg,#2bc0e4,#1b6fa8);}\n");
+  html += F(".menu-item.preview{background:linear-gradient(135deg,#4caf50,#2e7d32);}\n");
   html += F(".content{padding:1.5rem;max-width:920px;margin:0 auto;}\n");
   html += F("form{margin:0;}\n");
   html += F(".panel{background:#101728;border-radius:16px;padding:1.5rem;margin-bottom:1.5rem;box-shadow:0 16px 32px rgba(0,0,0,0.45);}\n");
@@ -159,6 +160,7 @@ String renderConfigPage(const AppConfig& config,
   html += F("<a href='#artnet' class='menu-item artnet'><span class='icon'>🎛️</span><span>Art-Net</span></a>");
   html += F("<a href='#wifi' class='menu-item wifi'><span class='icon'>📡</span><span>Wi-Fi</span></a>");
   html += F("<a href='#leds' class='menu-item leds'><span class='icon'>💡</span><span>LEDs</span></a>");
+  html += F("<a href='/visualizer' class='menu-item preview'><span class='icon'>🧩</span><span>Visualizador</span></a>");
   html += F("<a href='#estado' class='menu-item system'><span class='icon'>📊</span><span>Estado</span></a>");
   html += F("</nav>");
 
@@ -451,6 +453,361 @@ if (scanBtn) {
 )rawliteral";
 
   html += FPSTR(kWifiScript);
+  html += F("</body></html>");
+
+  return html;
+}
+String renderVisualizerPage(const AppConfig& config,
+                            const WebUiRuntime& runtime)
+{
+  const String artnetIpStr = (runtime.artnetIp != IPAddress((uint32_t)0)) ? runtime.artnetIp.toString() : String('-');
+  const String ethIpStr = runtime.ethLocalIp.toString();
+  const IPAddress wifiCurrentIp = runtime.wifiStaHasIp ? runtime.wifiStaIp :
+                                  (runtime.wifiApRunning ? runtime.wifiApIp : IPAddress((uint32_t)0));
+  const String wifiIpStr = (wifiCurrentIp != IPAddress((uint32_t)0)) ? wifiCurrentIp.toString() : String('-');
+  String wifiSsidLabel = runtime.wifiStaSsidCurrent.length() ? runtime.wifiStaSsidCurrent : config.wifiStaSsid;
+  wifiSsidLabel.trim();
+  const String wifiSsidEsc = wifiSsidLabel.length() ? htmlEscape(wifiSsidLabel) : String(F("(no asociado)"));
+
+  String html;
+  html.reserve(16000);
+  html += F("<!DOCTYPE html><html lang='es'><head><meta charset='utf-8'>");
+  html += F("<meta name='viewport' content='width=device-width,initial-scale=1'>");
+  html += F("<title>PixelEtherLED - Visualizador</title>");
+  html += F("<style>:root{color-scheme:dark;}body{font-family:'Segoe UI',Helvetica,Arial,sans-serif;background:#080b14;color:#f0f0f0;margin:0;}\n");
+  html += F("header{background:linear-gradient(135deg,#111a30,#0b4bd8);padding:1.75rem;text-align:center;box-shadow:0 8px 20px rgba(0,0,0,0.55);}\n");
+  html += F("header h1{margin:0;font-size:2rem;font-weight:700;}header p{margin:0.35rem 0 0;color:#d0dcff;font-size:1rem;}\n");
+  html += F(".menu{display:flex;flex-wrap:wrap;justify-content:center;gap:0.75rem;padding:1rem 1.5rem;background:#0d1424;box-shadow:0 6px 18px rgba(0,0,0,0.45);}\n");
+  html += F(".menu-item{display:flex;align-items:center;gap:0.75rem;padding:0.75rem 1.25rem;border-radius:12px;font-weight:600;text-decoration:none;color:#fff;box-shadow:0 6px 12px rgba(0,0,0,0.35);transition:transform 0.2s ease,box-shadow 0.2s ease;}\n");
+  html += F(".menu-item:hover{transform:translateY(-2px);box-shadow:0 10px 24px rgba(0,0,0,0.45);}\n");
+  html += F(".menu-item .icon{font-size:1.4rem;}\n");
+  html += F(".menu-item.config-link{background:linear-gradient(135deg,#3478f6,#1d3fbf);}\n");
+  html += F(".menu-item.preview{background:linear-gradient(135deg,#4caf50,#2e7d32);}\n");
+  html += F(".menu-item.active{outline:2px solid rgba(255,255,255,0.35);outline-offset:2px;}\n");
+  html += F(".content{padding:1.5rem;max-width:1100px;margin:0 auto;}\n");
+  html += F(".panel{background:#101728;border-radius:16px;padding:1.5rem;margin-bottom:1.5rem;box-shadow:0 16px 32px rgba(0,0,0,0.45);}\n");
+  html += F(".panel-title{display:flex;align-items:center;gap:0.6rem;margin:0 0 1.25rem;font-size:1.35rem;font-weight:700;color:#f5f7ff;}\n");
+  html += F(".panel-title .badge{font-size:1.5rem;}\n");
+  html += F(".grid-controls{display:flex;flex-wrap:wrap;gap:1rem;margin-bottom:1rem;}\n");
+  html += F(".grid-controls label{display:flex;flex-direction:column;font-weight:600;font-size:0.95rem;}\n");
+  html += F(".grid-controls input{margin-top:0.35rem;padding:0.55rem 0.7rem;border-radius:10px;border:1px solid #23314d;background:#0b1322;color:#f0f0f0;width:120px;}\n");
+  html += F(".grid-controls button{padding:0.65rem 1.2rem;background:#1a2744;color:#d4dcff;border:none;border-radius:10px;font-weight:600;cursor:pointer;transition:background 0.2s ease;box-shadow:0 6px 16px rgba(0,0,0,0.35);}\n");
+  html += F(".grid-controls button.primary{background:linear-gradient(135deg,#3478f6,#2746ff);color:#fff;}\n");
+  html += F(".grid-controls button:hover{background:#23355c;}\n");
+  html += F(".grid-controls button.primary:hover{background:linear-gradient(135deg,#255fcb,#1b34af);}\n");
+  html += F(".visual-grid{display:grid;gap:0.5rem;justify-content:flex-start;}\n");
+  html += F(".pixel-cell{position:relative;width:56px;height:56px;border-radius:10px;border:1px solid rgba(255,255,255,0.08);background:#0b1322;display:flex;align-items:center;justify-content:center;transition:transform 0.15s ease,box-shadow 0.15s ease;}\n");
+  html += F(".pixel-cell:hover{transform:translateY(-2px);box-shadow:0 8px 20px rgba(0,0,0,0.45);}\n");
+  html += F(".pixel-cell.invalid{outline:2px solid #ff3860;outline-offset:1px;}\n");
+  html += F(".pixel-cell input{width:100%;height:100%;border:none;background:transparent;color:inherit;font-weight:700;font-size:0.95rem;text-align:center;appearance:textfield;}\n");
+  html += F(".pixel-cell input:focus{outline:none;}\n");
+  html += F(".pixel-label{position:absolute;pointer-events:none;font-weight:700;}\n");
+  html += F(".preview-actions{display:flex;flex-wrap:wrap;align-items:center;gap:1rem;margin-top:1rem;}\n");
+  html += F(".preview-actions button{padding:0.75rem 1.4rem;border:none;border-radius:12px;font-weight:700;cursor:pointer;background:linear-gradient(135deg,#ff8a00,#e52e71);color:#fff;box-shadow:0 10px 24px rgba(229,46,113,0.35);}\n");
+  html += F(".preview-actions button:hover{background:linear-gradient(135deg,#e97800,#c8265d);}\n");
+  html += F(".preview-status{font-size:0.95rem;color:#d0dcff;}\n");
+  html += F(".status-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:1rem;font-size:0.95rem;}\n");
+  html += F(".status-item{background:#0b1322;border-radius:12px;padding:0.85rem 1rem;border:1px solid rgba(255,255,255,0.05);}\n");
+  html += F(".status-item strong{display:block;font-size:0.85rem;text-transform:uppercase;letter-spacing:0.05em;color:#93a5d8;margin-bottom:0.35rem;}\n");
+  html += F(".tips{margin:0.5rem 0 0;color:#9bb3ff;font-size:0.9rem;line-height:1.5;}\n");
+  html += F("@media (max-width:640px){.pixel-cell{width:48px;height:48px;}.grid-controls input{width:100px;}}\n");
+  html += F("</style></head><body>");
+
+  html += F("<header><h1>PixelEtherLED</h1><p>Visualizador en vivo de Art-Net</p></header>");
+  html += F("<nav class='menu'>");
+  html += F("<a href='/config' class='menu-item config-link'><span class='icon'>⚙️</span><span>Configuración</span></a>");
+  html += F("<a href='/visualizer' class='menu-item preview active'><span class='icon'>🧩</span><span>Visualizador</span></a>");
+  html += F("</nav>");
+
+  html += F("<div class='content'>");
+  html += F("<section class='panel'><h2 class='panel-title'><span class='badge'>🧱</span><span>Diseña tu cuadrícula</span></h2>");
+  html += F("<p class='tips'>Elige el número de filas y columnas que representa tu panel físico. Puedes autocompletar el orden de los LEDs en modo normal o serpentina, y ajustar manualmente cualquier posición.</p>");
+  html += F("<div class='grid-controls'>");
+  html += F("<label for='gridRows'>Filas<input type='number' id='gridRows' min='1' max='64' value='1'></label>");
+  html += F("<label for='gridCols'>Columnas<input type='number' id='gridCols' min='1' max='64' value='1'></label>");
+  html += F("<button id='generateGrid' class='primary'>Crear cuadrícula</button>");
+  html += F("<button id='autoFillNormal'>Autocompletar (normal)</button>");
+  html += F("<button id='autoFillSnake'>Autocompletar (serpentina)</button>");
+  html += F("<button id='clearGrid'>Limpiar</button>");
+  html += F("</div>");
+  html += F("<div id='visualGrid' class='visual-grid' aria-live='polite'></div>");
+  html += F("<div class='preview-actions'><button id='togglePreview'>Iniciar vista previa</button><div class='preview-status' id='previewStatus'>Esperando a iniciar…</div></div>");
+  html += F("</section>");
+
+  html += F("<section class='panel'><h2 class='panel-title'><span class='badge'>📊</span><span>Estado en tiempo real</span></h2>");
+  html += F("<div class='status-grid'>");
+  html += F("<div class='status-item'><strong>LEDs configurados</strong><span>");
+  html += String(config.numLeds);
+  html += F("</span></div>");
+  html += F("<div class='status-item'><strong>Universos activos</strong><span>");
+  html += String(runtime.universeCount);
+  html += F("</span></div>");
+  html += F("<div class='status-item'><strong>Frames Art-Net</strong><span id='frameCounter'>");
+  html += String(runtime.dmxFrames);
+  html += F("</span></div>");
+  html += F("<div class='status-item'><strong>Interfaz preferida</strong><span>");
+  html += artnetInputLabel(config.artnetInput);
+  html += F("</span></div>");
+  html += F("<div class='status-item'><strong>IP Ethernet</strong><span>");
+  html += ethIpStr;
+  html += F("</span></div>");
+  html += F("<div class='status-item'><strong>IP Wi-Fi actual</strong><span>");
+  html += wifiIpStr;
+  html += F("</span></div>");
+  html += F("<div class='status-item'><strong>SSID Wi-Fi</strong><span>");
+  html += wifiSsidEsc;
+  html += F("</span></div>");
+  html += F("<div class='status-item'><strong>Último origen Art-Net</strong><span>");
+  html += artnetIpStr;
+  html += F("</span></div>");
+  html += F("</div>");
+  html += F("<p class='tips'>La vista previa consulta periódicamente el estado de los LEDs (cada 200 ms) sin interrumpir la reproducción.</p>");
+  html += F("</section>");
+  html += F("</div>");
+
+  static const char PROGMEM kVisualizerScript[] = R"rawliteral(
+<script>
+(function(){
+  const totalLeds = {{TOTAL_LEDS}};
+  const pixelsPerUniverse = {{PIXELS_PER_UNIVERSE}};
+  const pollInterval = {{POLL_INTERVAL}};
+  const initialFrames = {{INITIAL_FRAMES}};
+  const gridRowsInput = document.getElementById('gridRows');
+  const gridColsInput = document.getElementById('gridCols');
+  const gridContainer = document.getElementById('visualGrid');
+  const generateBtn = document.getElementById('generateGrid');
+  const autoNormalBtn = document.getElementById('autoFillNormal');
+  const autoSnakeBtn = document.getElementById('autoFillSnake');
+  const clearBtn = document.getElementById('clearGrid');
+  const togglePreviewBtn = document.getElementById('togglePreview');
+  const previewStatus = document.getElementById('previewStatus');
+  const frameCounter = document.getElementById('frameCounter');
+  let previewTimer = null;
+  let cells = [];
+  let lastFrame = initialFrames;
+
+  function clampValue(value, min, max) {
+    value = parseInt(value, 10);
+    if (isNaN(value)) return null;
+    if (value < min) value = min;
+    if (value > max) value = max;
+    return value;
+  }
+
+  function computeDefaultGrid() {
+    const approx = Math.max(1, Math.round(Math.sqrt(totalLeds)));
+    const rows = approx;
+    const cols = Math.max(1, Math.ceil(totalLeds / rows));
+    gridRowsInput.value = rows;
+    gridColsInput.value = cols;
+  }
+
+  function buildGrid() {
+    const rows = clampValue(gridRowsInput.value, 1, 128) || 1;
+    const cols = clampValue(gridColsInput.value, 1, 256) || 1;
+    gridContainer.innerHTML = '';
+    cells = [];
+    gridContainer.style.gridTemplateColumns = 'repeat(' + cols + ', minmax(0, 1fr))';
+    const total = rows * cols;
+    for (let i = 0; i < total; ++i) {
+      const cell = document.createElement('div');
+      cell.className = 'pixel-cell';
+      const input = document.createElement('input');
+      input.type = 'number';
+      input.min = '0';
+      input.max = String(totalLeds - 1);
+      input.placeholder = '-';
+      const label = document.createElement('span');
+      label.className = 'pixel-label';
+      label.textContent = '-';
+      input.addEventListener('input', function() {
+        const value = input.value.trim();
+        label.textContent = value.length ? value : '-';
+        validateCell(cell, input);
+      });
+      cell.appendChild(input);
+      cell.appendChild(label);
+      gridContainer.appendChild(cell);
+      cells.push({ wrapper: cell, input: input, label: label });
+    }
+  }
+
+  function validateCell(cell, input) {
+    const value = input.value.trim();
+    if (!value.length) {
+      cell.classList.remove('invalid');
+      return null;
+    }
+    const parsed = parseInt(value, 10);
+    if (isNaN(parsed) || parsed < 0 || parsed >= totalLeds) {
+      cell.classList.add('invalid');
+      return null;
+    }
+    cell.classList.remove('invalid');
+    return parsed;
+  }
+
+  function clearGrid() {
+    cells.forEach(function(cell) {
+      cell.input.value = '';
+      cell.label.textContent = '-';
+      cell.wrapper.style.backgroundColor = '#0b1322';
+      cell.wrapper.style.color = '#f0f0f0';
+      cell.wrapper.classList.remove('invalid');
+    });
+  }
+
+  function autoFill(serpentine) {
+    const rows = clampValue(gridRowsInput.value, 1, 128) || 1;
+    const cols = clampValue(gridColsInput.value, 1, 256) || 1;
+    let index = 0;
+    for (let r = 0; r < rows; ++r) {
+      const start = r * cols;
+      const end = start + cols;
+      const slice = cells.slice(start, end);
+      const rowCells = serpentine && (r % 2 === 1) ? slice.slice().reverse() : slice;
+      rowCells.forEach(function(cell) {
+        if (index < totalLeds) {
+          cell.input.value = index;
+          cell.label.textContent = index;
+        } else {
+          cell.input.value = '';
+          cell.label.textContent = '-';
+        }
+        validateCell(cell.wrapper, cell.input);
+        ++index;
+      });
+    }
+  }
+
+  function luminanceFromHex(hex) {
+    if (!hex || hex.length !== 7) {
+      return 0;
+    }
+    const r = parseInt(hex.substr(1, 2), 16) / 255;
+    const g = parseInt(hex.substr(3, 2), 16) / 255;
+    const b = parseInt(hex.substr(5, 2), 16) / 255;
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  }
+
+  function applyColor(cell, hex) {
+    const color = hex || '#0b1322';
+    cell.wrapper.style.backgroundColor = color;
+    const lum = luminanceFromHex(color);
+    cell.wrapper.style.color = lum > 0.45 ? '#0b1322' : '#ffffff';
+  }
+
+  function collectIndices() {
+    return cells.map(function(cell) {
+      return validateCell(cell.wrapper, cell.input);
+    });
+  }
+
+  function setPreviewState(running, message) {
+    togglePreviewBtn.textContent = running ? 'Detener vista previa' : 'Iniciar vista previa';
+    previewStatus.textContent = message;
+  }
+
+  function scheduleNextUpdate() {
+    if (previewTimer) {
+      clearTimeout(previewTimer);
+    }
+    previewTimer = setTimeout(fetchPixels, pollInterval);
+  }
+
+  function fetchPixels() {
+    fetch('/api/led_pixels', { cache: 'no-store' })
+      .then(function(response) {
+        if (!response.ok) {
+          throw new Error('HTTP ' + response.status);
+        }
+        return response.json();
+      })
+      .then(function(data) {
+        if (!data || !Array.isArray(data.leds)) {
+          setPreviewState(true, 'Formato de respuesta desconocido');
+          scheduleNextUpdate();
+          return;
+        }
+        const indices = collectIndices();
+        cells.forEach(function(cell, idx) {
+          const ledIndex = indices[idx];
+          if (typeof ledIndex === 'number' && ledIndex < data.leds.length) {
+            applyColor(cell, data.leds[ledIndex]);
+          } else {
+            applyColor(cell, '#0b1322');
+          }
+        });
+        if (typeof data.dmxFrames === 'number') {
+          frameCounter.textContent = data.dmxFrames;
+          if (data.dmxFrames !== lastFrame) {
+            lastFrame = data.dmxFrames;
+            previewStatus.textContent = 'Recibiendo datos · Universos: ' + data.universeCount + ' · LEDs por universo: ' + pixelsPerUniverse;
+          } else {
+            previewStatus.textContent = 'Sin cambios recientes en Art-Net';
+          }
+        }
+        scheduleNextUpdate();
+      })
+      .catch(function(err) {
+        setPreviewState(true, 'Error al consultar datos: ' + err.message);
+        scheduleNextUpdate();
+      });
+  }
+
+  function startPreview() {
+    if (previewTimer) {
+      return;
+    }
+    setPreviewState(true, 'Consultando datos de Art-Net…');
+    fetchPixels();
+  }
+
+  function stopPreview() {
+    if (previewTimer) {
+      clearTimeout(previewTimer);
+      previewTimer = null;
+    }
+    setPreviewState(false, 'Vista previa detenida');
+  }
+
+  generateBtn.addEventListener('click', function() {
+    buildGrid();
+  });
+
+  autoNormalBtn.addEventListener('click', function() {
+    autoFill(false);
+  });
+
+  autoSnakeBtn.addEventListener('click', function() {
+    autoFill(true);
+  });
+
+  clearBtn.addEventListener('click', function() {
+    clearGrid();
+  });
+
+  togglePreviewBtn.addEventListener('click', function() {
+    if (previewTimer) {
+      stopPreview();
+    } else {
+      startPreview();
+    }
+  });
+
+  computeDefaultGrid();
+  buildGrid();
+  setPreviewState(false, 'Vista previa detenida');
+})();
+</script>
+)rawliteral";
+
+  String script = FPSTR(kVisualizerScript);
+  script.replace(F("{{TOTAL_LEDS}}"), String(config.numLeds));
+  script.replace(F("{{PIXELS_PER_UNIVERSE}}"), String(config.pixelsPerUniverse));
+  script.replace(F("{{POLL_INTERVAL}}"), String(200));
+  script.replace(F("{{INITIAL_FRAMES}}"), String(runtime.dmxFrames));
+  html += script;
   html += F("</body></html>");
 
   return html;
