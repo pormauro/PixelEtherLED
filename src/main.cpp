@@ -651,7 +651,7 @@ void handleConfigPost()
   }
   if (g_server.hasArg("artnetInput")) {
     long parsed = g_server.arg("artnetInput").toInt();
-    parsed = std::clamp(parsed, 0L, 2L);
+    parsed = std::max(0L, std::min(2L, parsed));
     newConfig.artnetInput = static_cast<uint8_t>(parsed);
   }
   if (g_server.hasArg("wifiEnabled")) {
