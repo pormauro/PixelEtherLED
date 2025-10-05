@@ -24,6 +24,14 @@ static const IPAddress STATIC_MASK (255, 255, 255, 0);
 static const IPAddress STATIC_DNS1 (1, 1, 1, 1);
 static const IPAddress STATIC_DNS2 (8, 8, 8, 8);
 
+constexpr bool     DEFAULT_USE_DHCP          = true;
+constexpr bool     DEFAULT_FALLBACK_TO_STATIC = true;
+constexpr uint32_t DEFAULT_STATIC_IP         = static_cast<uint32_t>(STATIC_IP);
+constexpr uint32_t DEFAULT_STATIC_GW         = static_cast<uint32_t>(STATIC_GW);
+constexpr uint32_t DEFAULT_STATIC_MASK       = static_cast<uint32_t>(STATIC_MASK);
+constexpr uint32_t DEFAULT_STATIC_DNS1       = static_cast<uint32_t>(STATIC_DNS1);
+constexpr uint32_t DEFAULT_STATIC_DNS2       = static_cast<uint32_t>(STATIC_DNS2);
+
 // ===================== LEDS =====================
 constexpr uint8_t LED_DATA_PIN        = 2;
 constexpr uint16_t MAX_LEDS             = 1024;
@@ -78,17 +86,61 @@ struct AppConfig {
   uint8_t brightness;
   uint8_t chipType;
   uint8_t colorOrder;
+  bool     useDhcp;
+  bool     fallbackToStatic;
+  uint32_t staticIp;
+  uint32_t staticGateway;
+  uint32_t staticSubnet;
+  uint32_t staticDns1;
+  uint32_t staticDns2;
 };
 
-AppConfig g_config = {
-  DEFAULT_DHCP_TIMEOUT,
-  DEFAULT_NUM_LEDS,
-  DEFAULT_START_UNIVERSE,
-  DEFAULT_PIXELS_PER_UNIVERSE,
-  DEFAULT_BRIGHTNESS,
-  DEFAULT_CHIP_TYPE,
-  DEFAULT_COLOR_ORDER
-};
+AppConfig makeDefaultConfig();
+String ipToString(uint32_t ipValue);
+uint32_t parseIp(const String& text, uint32_t fallback);
+void restoreFactoryDefaults();
+bool checkFactoryResetOnBoot();
+
+AppConfig g_config = makeDefaultConfig();
+
+constexpr uint8_t FACTORY_RESET_PIN = 36;  // Entrada I4
+constexpr bool    FACTORY_RESET_ACTIVE_LOW = true;
+constexpr uint32_t FACTORY_RESET_HOLD_MS  = 10000;
+
+AppConfig makeDefaultConfig()
+{
+  AppConfig cfg{};
+  cfg.dhcpTimeoutMs   = DEFAULT_DHCP_TIMEOUT;
+  cfg.numLeds         = DEFAULT_NUM_LEDS;
+  cfg.startUniverse   = DEFAULT_START_UNIVERSE;
+  cfg.pixelsPerUniverse = DEFAULT_PIXELS_PER_UNIVERSE;
+  cfg.brightness      = DEFAULT_BRIGHTNESS;
+  cfg.chipType        = DEFAULT_CHIP_TYPE;
+  cfg.colorOrder      = DEFAULT_COLOR_ORDER;
+  cfg.useDhcp         = DEFAULT_USE_DHCP;
+  cfg.fallbackToStatic = DEFAULT_FALLBACK_TO_STATIC;
+  cfg.staticIp        = DEFAULT_STATIC_IP;
+  cfg.staticGateway   = DEFAULT_STATIC_GW;
+  cfg.staticSubnet    = DEFAULT_STATIC_MASK;
+  cfg.staticDns1      = DEFAULT_STATIC_DNS1;
+  cfg.staticDns2      = DEFAULT_STATIC_DNS2;
+  return cfg;
+}
+
+String ipToString(uint32_t ipValue)
+{
+  IPAddress ip(ipValue);
+  return ip.toString();
+}
+
+uint32_t parseIp(const String& text, uint32_t fallback)
+{
+  IPAddress ip;
+  if (ip.fromString(text)) {
+    return static_cast<uint32_t>(ip);
+  }
+  return fallback;
+}
 
 Preferences g_prefs;
 WebServer g_server(80);
@@ -96,6 +148,52 @@ WebServer g_server(80);
 bool g_firmwareUploadHandled = false;
 bool g_firmwareUpdateShouldRestart = false;
 String g_firmwareUpdateMessage;
+
+bool isFactoryResetPressed()
+{
+  int level = digitalRead(FACTORY_RESET_PIN);
+  if (FACTORY_RESET_ACTIVE_LOW) {
+    return level == LOW;
+  }
+  return level == HIGH;
+}
+
+bool checkFactoryResetOnBoot()
+{
+  if (FACTORY_RESET_ACTIVE_LOW) {
+    pinMode(FACTORY_RESET_PIN, INPUT_PULLUP);
+  } else {
+    pinMode(FACTORY_RESET_PIN, INPUT);
+  }
+
+  if (!isFactoryResetPressed()) {
+    return false;
+  }
+
+  Serial.println("[CFG] Botón de reset detectado. Mantener presionado 10 segundos para restaurar.");
+
+  const uint32_t start = millis();
+  while (millis() - start < FACTORY_RESET_HOLD_MS) {
+    if (!isFactoryResetPressed()) {
+      Serial.println("[CFG] Restablecimiento cancelado.");
+      return false;
+    }
+    delay(50);
+  }
+
+  Serial.println("[CFG] Restablecimiento confirmado.");
+  return true;
+}
+
+void restoreFactoryDefaults()
+{
+  Serial.println("[CFG] Restaurando valores de fábrica...");
+  if (g_prefs.begin("pixelcfg", false)) {
+    g_prefs.clear();
+    g_prefs.end();
+  }
+  g_config = makeDefaultConfig();
+}
 
 // ===================== ART-NET =====================
 ArtNetNode artnet;
@@ -249,6 +347,24 @@ void normalizeConfig(AppConfig& config)
   }
   config.chipType   = clampIndex(config.chipType, static_cast<uint8_t>(LedChipType::CHIP_TYPE_COUNT), DEFAULT_CHIP_TYPE);
   config.colorOrder = clampIndex(config.colorOrder, static_cast<uint8_t>(LedColorOrder::COLOR_ORDER_COUNT), DEFAULT_COLOR_ORDER);
+  config.useDhcp = config.useDhcp ? true : false;
+  config.fallbackToStatic = config.fallbackToStatic ? true : false;
+
+  if (config.staticSubnet == 0) {
+    config.staticSubnet = DEFAULT_STATIC_MASK;
+  }
+  if (config.staticIp == 0) {
+    config.staticIp = DEFAULT_STATIC_IP;
+  }
+  if (config.staticGateway == 0) {
+    config.staticGateway = DEFAULT_STATIC_GW;
+  }
+  if (config.staticDns1 == 0) {
+    config.staticDns1 = config.staticGateway != 0 ? config.staticGateway : DEFAULT_STATIC_DNS1;
+  }
+  if (config.staticDns2 == 0) {
+    config.staticDns2 = DEFAULT_STATIC_DNS2;
+  }
 }
 
 template <template<uint8_t DATA_PIN, fl::EOrder RGB_ORDER> class CHIPSET>
@@ -305,15 +421,7 @@ const char* getColorOrderName(uint8_t value)
 
 void loadConfig()
 {
-  g_config = {
-    DEFAULT_DHCP_TIMEOUT,
-    DEFAULT_NUM_LEDS,
-    DEFAULT_START_UNIVERSE,
-    DEFAULT_PIXELS_PER_UNIVERSE,
-    DEFAULT_BRIGHTNESS,
-    DEFAULT_CHIP_TYPE,
-    DEFAULT_COLOR_ORDER
-  };
+  g_config = makeDefaultConfig();
 
   if (g_prefs.begin("pixelcfg", true)) {
     g_config.dhcpTimeoutMs   = g_prefs.getUInt("dhcpTimeout", g_config.dhcpTimeoutMs);
@@ -323,6 +431,13 @@ void loadConfig()
     g_config.brightness      = g_prefs.getUChar("brightness", g_config.brightness);
     g_config.chipType        = g_prefs.getUChar("chipType", g_config.chipType);
     g_config.colorOrder      = g_prefs.getUChar("colorOrder", g_config.colorOrder);
+    g_config.useDhcp         = g_prefs.getBool("useDhcp", g_config.useDhcp);
+    g_config.fallbackToStatic = g_prefs.getBool("dhcpFallback", g_config.fallbackToStatic);
+    g_config.staticIp        = g_prefs.getUInt("staticIp", g_config.staticIp);
+    g_config.staticGateway   = g_prefs.getUInt("staticGw", g_config.staticGateway);
+    g_config.staticSubnet    = g_prefs.getUInt("staticMask", g_config.staticSubnet);
+    g_config.staticDns1      = g_prefs.getUInt("staticDns1", g_config.staticDns1);
+    g_config.staticDns2      = g_prefs.getUInt("staticDns2", g_config.staticDns2);
     g_prefs.end();
   }
 
@@ -339,6 +454,13 @@ void saveConfig()
     g_prefs.putUChar("brightness", g_config.brightness);
     g_prefs.putUChar("chipType", g_config.chipType);
     g_prefs.putUChar("colorOrder", g_config.colorOrder);
+    g_prefs.putBool("useDhcp", g_config.useDhcp);
+    g_prefs.putBool("dhcpFallback", g_config.fallbackToStatic);
+    g_prefs.putUInt("staticIp", g_config.staticIp);
+    g_prefs.putUInt("staticGw", g_config.staticGateway);
+    g_prefs.putUInt("staticMask", g_config.staticSubnet);
+    g_prefs.putUInt("staticDns1", g_config.staticDns1);
+    g_prefs.putUInt("staticDns2", g_config.staticDns2);
     g_prefs.end();
   }
 }
@@ -360,13 +482,20 @@ String buildConfigPage(const String& message)
 {
   String html;
   html.reserve(4096);
+  const bool usingDhcp = g_config.useDhcp;
+  const String fallbackLabel = g_config.fallbackToStatic ? "Aplicar IP fija configurada" : "Mantener sin IP";
+  const String staticIpStr   = ipToString(g_config.staticIp);
+  const String staticGwStr   = ipToString(g_config.staticGateway);
+  const String staticMaskStr = ipToString(g_config.staticSubnet);
+  const String staticDns1Str = ipToString(g_config.staticDns1);
+  const String staticDns2Str = ipToString(g_config.staticDns2);
   html += F("<!DOCTYPE html><html lang='es'><head><meta charset='utf-8'>");
   html += F("<meta name='viewport' content='width=device-width,initial-scale=1'>");
   html += F("<title>PixelEtherLED - Configuración</title>");
   html += F("<style>body{font-family:Segoe UI,Helvetica,Arial,sans-serif;background:#0c0f1a;color:#f0f0f0;margin:0;padding:0;}\n");
   html += F("header{background:#121a2a;padding:1.5rem;text-align:center;}\n");
   html += F("h1{margin:0;font-size:1.8rem;}\nsection{padding:1.5rem;}\nform{max-width:640px;margin:0 auto;background:#141d30;padding:1.5rem;border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,0.45);}\n");
-  html += F("label{display:block;margin-bottom:0.35rem;font-weight:600;}\ninput[type=number]{width:100%;padding:0.65rem;border-radius:8px;border:1px solid #23314d;background:#0c1424;color:#f0f0f0;margin-bottom:1rem;}\n");
+  html += F("label{display:block;margin-bottom:0.35rem;font-weight:600;}\ninput[type=number],input[type=text],select{width:100%;padding:0.65rem;border-radius:8px;border:1px solid #23314d;background:#0c1424;color:#f0f0f0;margin-bottom:1rem;}\n");
   html += F("button{width:100%;padding:0.85rem;background:#3478f6;color:#fff;border:none;border-radius:8px;font-size:1rem;font-weight:600;cursor:pointer;}\nbutton:hover{background:#255fcb;}\n");
   html += F(".card{max-width:640px;margin:1.5rem auto;background:#141d30;padding:1.5rem;border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,0.45);}\n");
   html += F(".grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:1rem;}\nfooter{text-align:center;padding:1rem;color:#96a2c5;font-size:0.85rem;}\n");
@@ -382,6 +511,26 @@ String buildConfigPage(const String& message)
   html += F("<form method='post' action='/config'>");
   html += F("<label for='dhcpTimeout'>Tiempo de espera DHCP (ms)</label>");
   html += "<input type='number' id='dhcpTimeout' name='dhcpTimeout' min='500' max='60000' value='" + String(g_config.dhcpTimeoutMs) + "'>";
+  html += F("<label for='networkMode'>Modo de red</label>");
+  html += F("<select id='networkMode' name='networkMode'>");
+  html += String("<option value='dhcp'") + (usingDhcp ? " selected" : "") + ">DHCP (automático)</option>";
+  html += String("<option value='static'") + (!usingDhcp ? " selected" : "") + ">IP fija</option>";
+  html += F("</select>");
+  html += F("<label for='fallbackToStatic'>Si DHCP falla</label>");
+  html += F("<select id='fallbackToStatic' name='fallbackToStatic'>");
+  html += String("<option value='1'") + (g_config.fallbackToStatic ? " selected" : "") + ">Aplicar IP fija configurada</option>";
+  html += String("<option value='0'") + (!g_config.fallbackToStatic ? " selected" : "") + ">Mantener sin IP</option>";
+  html += F("</select>");
+  html += F("<label for='staticIp'>IP fija</label>");
+  html += "<input type='text' id='staticIp' name='staticIp' value='" + staticIpStr + "'>";
+  html += F("<label for='staticGateway'>Puerta de enlace</label>");
+  html += "<input type='text' id='staticGateway' name='staticGateway' value='" + staticGwStr + "'>";
+  html += F("<label for='staticMask'>Máscara de subred</label>");
+  html += "<input type='text' id='staticMask' name='staticMask' value='" + staticMaskStr + "'>";
+  html += F("<label for='staticDns1'>DNS primario</label>");
+  html += "<input type='text' id='staticDns1' name='staticDns1' value='" + staticDns1Str + "'>";
+  html += F("<label for='staticDns2'>DNS secundario</label>");
+  html += "<input type='text' id='staticDns2' name='staticDns2' value='" + staticDns2Str + "'>";
   html += F("<label for='numLeds'>Cantidad de LEDs activos</label>");
   html += "<input type='number' id='numLeds' name='numLeds' min='1' max='" + String(MAX_LEDS) + "' value='" + String(g_config.numLeds) + "'>";
   html += F("<label for='startUniverse'>Universo Art-Net inicial</label>");
@@ -416,6 +565,12 @@ String buildConfigPage(const String& message)
   html += F("<h2>Estado del sistema</h2><div class='grid'>");
   html += "<div><strong>IP actual:</strong><br>" + ETH.localIP().toString() + "</div>";
   html += "<div><strong>Link Ethernet:</strong><br>" + String(eth_link_up ? "activo" : "desconectado") + "</div>";
+  html += "<div><strong>Modo de red:</strong><br>" + String(usingDhcp ? "DHCP" : "IP fija") + "</div>";
+  html += "<div><strong>Fallback DHCP:</strong><br>" + fallbackLabel + "</div>";
+  html += "<div><strong>IP fija configurada:</strong><br>" + staticIpStr + "</div>";
+  html += "<div><strong>Gateway:</strong><br>" + staticGwStr + "</div>";
+  html += "<div><strong>Máscara:</strong><br>" + staticMaskStr + "</div>";
+  html += "<div><strong>DNS:</strong><br>" + staticDns1Str + " / " + staticDns2Str + "</div>";
   html += "<div><strong>Universos:</strong><br>" + String(g_universeCount) + " (desde " + String(g_config.startUniverse) + ")";
   html += "</div><div><strong>Frames DMX:</strong><br>" + String((unsigned long)g_dmxFrames) + "</div>";
   html += "<div><strong>Brillo:</strong><br>" + String(g_config.brightness) + "/255";
@@ -453,6 +608,40 @@ void handleConfigPost()
     parsed = std::max(500L, parsed);
     parsed = std::min(60000L, parsed);
     newConfig.dhcpTimeoutMs = static_cast<uint32_t>(parsed);
+  }
+  if (g_server.hasArg("networkMode")) {
+    String mode = g_server.arg("networkMode");
+    mode.trim();
+    mode.toLowerCase();
+    newConfig.useDhcp = (mode != "static");
+  }
+  if (g_server.hasArg("fallbackToStatic")) {
+    newConfig.fallbackToStatic = g_server.arg("fallbackToStatic") == "1";
+  }
+  if (g_server.hasArg("staticIp")) {
+    String value = g_server.arg("staticIp");
+    value.trim();
+    newConfig.staticIp = parseIp(value, newConfig.staticIp);
+  }
+  if (g_server.hasArg("staticGateway")) {
+    String value = g_server.arg("staticGateway");
+    value.trim();
+    newConfig.staticGateway = parseIp(value, newConfig.staticGateway);
+  }
+  if (g_server.hasArg("staticMask")) {
+    String value = g_server.arg("staticMask");
+    value.trim();
+    newConfig.staticSubnet = parseIp(value, newConfig.staticSubnet);
+  }
+  if (g_server.hasArg("staticDns1")) {
+    String value = g_server.arg("staticDns1");
+    value.trim();
+    newConfig.staticDns1 = parseIp(value, newConfig.staticDns1);
+  }
+  if (g_server.hasArg("staticDns2")) {
+    String value = g_server.arg("staticDns2");
+    value.trim();
+    newConfig.staticDns2 = parseIp(value, newConfig.staticDns2);
   }
   if (g_server.hasArg("numLeds")) {
     long parsed = g_server.arg("numLeds").toInt();
@@ -580,8 +769,10 @@ void handleFirmwareUpdatePost()
   }
 }
 
-void bringUpEthernetWithDhcpFallback(unsigned long dhcpTimeoutMs = DEFAULT_DHCP_TIMEOUT)
+void bringUpEthernet(const AppConfig& config)
 {
+  eth_link_up = false;
+  eth_has_ip  = false;
   pinMode(ETH_POWER_PIN, OUTPUT);
   digitalWrite(ETH_POWER_PIN, HIGH);
   delay(10);
@@ -590,24 +781,48 @@ void bringUpEthernetWithDhcpFallback(unsigned long dhcpTimeoutMs = DEFAULT_DHCP_
     Serial.println("[ETH] begin() FALLÓ");
   }
 
-  Serial.print("[ETH] Esperando link + DHCP");
+  IPAddress staticIp(config.staticIp);
+  IPAddress staticGw(config.staticGateway);
+  IPAddress staticMask(config.staticSubnet);
+  IPAddress staticDns1(config.staticDns1);
+  IPAddress staticDns2(config.staticDns2);
+
+  if (!config.useDhcp) {
+    bool ok = ETH.config(staticIp, staticGw, staticMask, staticDns1, staticDns2);
+    if (ok) {
+      eth_has_ip = (ETH.localIP() != IPAddress((uint32_t)0));
+      Serial.print("[ETH] IP fija configurada: ");
+      Serial.println(ETH.localIP());
+    } else {
+      Serial.println("[ETH] ETH.config() FALLÓ (no se pudo asignar la IP fija)");
+    }
+  }
+
+  Serial.print(config.useDhcp ? "[ETH] Esperando link + DHCP" : "[ETH] Esperando link");
   const uint32_t t0 = millis();
-  while (millis() - t0 < dhcpTimeoutMs) {
+  while (millis() - t0 < config.dhcpTimeoutMs) {
     Serial.print(".");
     delay(250);
-    if (eth_link_up && eth_has_ip) break;
+    if (config.useDhcp) {
+      if (eth_link_up && eth_has_ip) break;
+    } else if (eth_link_up) {
+      break;
+    }
   }
   Serial.println();
 
-  if (!eth_has_ip) {
-    Serial.println("[ETH] DHCP no respondió. Configurando IP fija…");
-    bool ok = ETH.config(STATIC_IP, STATIC_GW, STATIC_MASK, STATIC_DNS1, STATIC_DNS2);
-    if (ok) {
-      Serial.print("[ETH] IP fija configurada: ");
-      Serial.println(ETH.localIP());
-      eth_has_ip = (ETH.localIP() != IPAddress((uint32_t)0));
-    } else {
-      Serial.println("[ETH] ETH.config() FALLÓ (IP fija no aplicada)");
+  if (config.useDhcp && !eth_has_ip) {
+    Serial.println("[ETH] DHCP no respondió.");
+    if (config.fallbackToStatic) {
+      Serial.println("[ETH] Aplicando configuración IP fija de respaldo…");
+      bool ok = ETH.config(staticIp, staticGw, staticMask, staticDns1, staticDns2);
+      if (ok) {
+        Serial.print("[ETH] IP fija configurada: ");
+        Serial.println(ETH.localIP());
+        eth_has_ip = (ETH.localIP() != IPAddress((uint32_t)0));
+      } else {
+        Serial.println("[ETH] ETH.config() FALLÓ (IP fija no aplicada)");
+      }
     }
   }
 
@@ -621,6 +836,10 @@ void setup()
   Serial.begin(115200);
   delay(200);
 
+  if (checkFactoryResetOnBoot()) {
+    restoreFactoryDefaults();
+  }
+
   loadConfig();
 
   initializeFastLEDController();
@@ -631,7 +850,7 @@ void setup()
   applyConfig();
 
   WiFi.onEvent(onWiFiEvent);
-  bringUpEthernetWithDhcpFallback(g_config.dhcpTimeoutMs);
+  bringUpEthernet(g_config);
 
   artnet.setNodeNames("PixelEtherLED", "PixelEtherLED Controller");
   artnet.begin();                      // responde a ArtPoll → Jinx "Scan"
