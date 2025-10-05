@@ -826,7 +826,7 @@ String buildConfigPage(const String& message)
   html += F("</div></div>");
 
   html += F("<div class='card'>");
-  html += F("<h2>Consejos</h2><ul><li>Si ampliás la tira LED, incrementá el parámetro <em>Cantidad de LEDs activos</em>.</li><li>Reducí el brillo máximo para ahorrar consumo o evitar saturación.</li><li>Ajustá el tiempo de espera de DHCP si tu red tarda más en asignar IP.</li><li>El valor de pixeles por universo determina cuántos LEDs se controlan por paquete Art-Net.</li></ul>");
+  html += F("<h2>Consejos</h2><ul><li>Si ampliás la tira LED, incrementá el parámetro <em>Cantidad de LEDs activos</em>.</li><li>Reducí el brillo máximo para ahorrar consumo o evitar saturación.</li><li>Ajustá el tiempo de espera de DHCP si tu red tarda más en asignar IP.</li><li>El valor de pixeles por universo determina cuántos LEDs se controlan por paquete Art-Net.</li><li>Mantené presionado el botón de reinicio durante 10 segundos al encender para restaurar la configuración de fábrica.</li></ul>");
   html += F("</div>");
 
   html += F("<div class='card'>");
