@@ -237,7 +237,7 @@ void normalizeConfig(AppConfig& config)
   config.colorOrder = clampIndex(config.colorOrder, static_cast<uint8_t>(LedColorOrder::COLOR_ORDER_COUNT), DEFAULT_COLOR_ORDER);
 }
 
-template <typename CHIPSET>
+template <template<uint8_t DATA_PIN, fl::EOrder RGB_ORDER> class CHIPSET>
 void addFastLedControllerForOrder(LedColorOrder order)
 {
   switch (order) {
