@@ -6,6 +6,7 @@
 #include <FastLED.h>
 #include <Preferences.h>
 #include <WebServer.h>
+#include <Update.h>
 #include <algorithm>
 #include <vector>
 
@@ -92,6 +93,10 @@ AppConfig g_config = {
 Preferences g_prefs;
 WebServer g_server(80);
 
+bool g_firmwareUploadHandled = false;
+bool g_firmwareUpdateShouldRestart = false;
+String g_firmwareUpdateMessage;
+
 // ===================== ART-NET =====================
 ArtNetNode artnet;
 std::vector<uint8_t> g_universeReceived;
@@ -153,6 +158,8 @@ void handleConfigGet();
 void handleConfigPost();
 void handleRoot();
 String buildConfigPage(const String& message = String());
+void handleFirmwareUpdatePost();
+void handleFirmwareUpload();
 
 void onDmxFrame(uint16_t universe, uint16_t length, uint8_t sequence,
                 uint8_t* data, IPAddress remoteIP)
@@ -363,7 +370,8 @@ String buildConfigPage(const String& message)
   html += F("button{width:100%;padding:0.85rem;background:#3478f6;color:#fff;border:none;border-radius:8px;font-size:1rem;font-weight:600;cursor:pointer;}\nbutton:hover{background:#255fcb;}\n");
   html += F(".card{max-width:640px;margin:1.5rem auto;background:#141d30;padding:1.5rem;border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,0.45);}\n");
   html += F(".grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:1rem;}\nfooter{text-align:center;padding:1rem;color:#96a2c5;font-size:0.85rem;}\n");
-  html += F(".message{margin-bottom:1rem;padding:0.75rem 1rem;border-radius:8px;background:#1f2b44;color:#a3ffb0;}\n</style></head><body>");
+  html += F(".message{margin-bottom:1rem;padding:0.75rem 1rem;border-radius:8px;background:#1f2b44;color:#a3ffb0;}\n");
+  html += F("input[type=file]{width:100%;margin-bottom:1rem;}\n</style></head><body>");
   html += F("<header><h1>PixelEtherLED</h1><p>Panel de configuración avanzada</p></header>");
   html += F("<section>");
   if (message.length()) {
@@ -417,6 +425,15 @@ String buildConfigPage(const String& message)
   html += F("</div></div>");
   html += F("<div class='card'>");
   html += F("<h2>Consejos</h2><ul><li>Si ampliás la tira LED, incrementá el parámetro <em>Cantidad de LEDs activos</em>.</li><li>Reducí el brillo máximo para ahorrar consumo o evitar saturación.</li><li>Ajustá el tiempo de espera de DHCP si tu red tarda más en asignar IP.</li><li>El valor de pixeles por universo determina cuántos LEDs se controlan por paquete Art-Net.</li></ul>");
+  html += F("</div>");
+  html += F("<div class='card'>");
+  html += F("<h2>Actualizar firmware</h2>");
+  html += F("<form method='post' action='/update' enctype='multipart/form-data'>");
+  html += F("<label for='firmware'>Seleccioná el archivo de firmware (.bin)</label>");
+  html += F("<input type='file' id='firmware' name='firmware' accept='.bin,application/octet-stream'>");
+  html += F("<button type='submit'>Subir y aplicar firmware</button>");
+  html += F("</form>");
+  html += F("<p style='margin-top:0.75rem;font-size:0.9rem;color:#96a2c5;'>El dispositivo se reiniciará automáticamente luego de una actualización exitosa.</p>");
   html += F("</div>");
   html += F("</section><footer>PixelEtherLED &bull; Panel de control web</footer></body></html>");
   return html;
@@ -492,6 +509,77 @@ void handleRoot()
   g_server.send(302, "text/plain", "Redireccionando a /config");
 }
 
+void handleFirmwareUpload()
+{
+  HTTPUpload& upload = g_server.upload();
+
+  switch (upload.status) {
+    case UPLOAD_FILE_START:
+      g_firmwareUploadHandled = true;
+      g_firmwareUpdateShouldRestart = false;
+      g_firmwareUpdateMessage = F("Iniciando actualización de firmware...");
+      Serial.printf("[FW] Iniciando carga: %s\n", upload.filename.c_str());
+      if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
+        Update.printError(Serial);
+        g_firmwareUpdateMessage = F("No se pudo iniciar la actualización de firmware.");
+      }
+      break;
+    case UPLOAD_FILE_WRITE:
+      if (Update.isRunning()) {
+        size_t written = Update.write(upload.buf, upload.currentSize);
+        if (written != upload.currentSize) {
+          Update.printError(Serial);
+          g_firmwareUpdateMessage = F("Error al escribir el firmware recibido.");
+        }
+      }
+      break;
+    case UPLOAD_FILE_END:
+      if (Update.isRunning()) {
+        if (Update.end(true)) {
+          g_firmwareUpdateMessage = F("Firmware actualizado correctamente. Reiniciando...");
+          g_firmwareUpdateShouldRestart = true;
+          Serial.printf("[FW] Actualización completada (%u bytes).\n", upload.totalSize);
+        } else {
+          Update.printError(Serial);
+          g_firmwareUpdateMessage = F("La actualización de firmware falló al finalizar.");
+        }
+      }
+      break;
+    case UPLOAD_FILE_ABORTED:
+      Update.abort();
+      g_firmwareUpdateMessage = F("La carga de firmware fue cancelada.");
+      Serial.println("[FW] Actualización abortada por el cliente.");
+      break;
+    default:
+      break;
+  }
+}
+
+void handleFirmwareUpdatePost()
+{
+  String message;
+  if (!g_firmwareUploadHandled) {
+    message = F("No se recibió ningún archivo de firmware.");
+  } else if (g_firmwareUpdateMessage.length()) {
+    message = g_firmwareUpdateMessage;
+  } else {
+    message = F("Proceso de actualización finalizado.");
+  }
+
+  bool shouldRestart = g_firmwareUpdateShouldRestart;
+
+  g_server.send(200, "text/html", buildConfigPage(message));
+
+  g_firmwareUploadHandled = false;
+  g_firmwareUpdateShouldRestart = false;
+  g_firmwareUpdateMessage.clear();
+
+  if (shouldRestart) {
+    delay(500);
+    ESP.restart();
+  }
+}
+
 void bringUpEthernetWithDhcpFallback(unsigned long dhcpTimeoutMs = DEFAULT_DHCP_TIMEOUT)
 {
   pinMode(ETH_POWER_PIN, OUTPUT);
@@ -552,6 +640,8 @@ void setup()
   g_server.on("/", HTTP_GET, handleRoot);
   g_server.on("/config", HTTP_GET, handleConfigGet);
   g_server.on("/config", HTTP_POST, handleConfigPost);
+  g_server.on("/update", HTTP_GET, handleRoot);
+  g_server.on("/update", HTTP_POST, handleFirmwareUpdatePost, handleFirmwareUpload);
   g_server.begin();
 
   Serial.println("[ARTNET] Listo");
