@@ -26,3 +26,6 @@ struct WebUiRuntime {
 String renderConfigPage(const AppConfig& config,
                         const WebUiRuntime& runtime,
                         const String& message);
+
+String renderVisualizerPage(const AppConfig& config,
+                            const WebUiRuntime& runtime);
