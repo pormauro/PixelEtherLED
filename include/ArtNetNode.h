@@ -33,6 +33,13 @@ private:
   void refreshLocalInfo();
   void copyStringToField(const String& source, char* destination, size_t maxLength);
 
+  enum class ActiveInterface : uint8_t {
+    None = 0,
+    Ethernet,
+    WiFiStation,
+    WiFiAccessPoint,
+  };
+
   WiFiUDP m_udp;
   ArtDmxCallback m_dmxCallback = nullptr;
   IPAddress m_localIp;
@@ -44,5 +51,6 @@ private:
   std::array<uint8_t, ARTNET_MAX_BUFFER> m_buffer{};
   std::array<uint8_t, 6> m_mac{};
   InterfacePreference m_interfacePreference = InterfacePreference::Ethernet;
+  ActiveInterface m_activeInterface = ActiveInterface::None;
 };
 
